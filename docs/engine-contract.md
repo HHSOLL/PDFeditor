@@ -16,6 +16,7 @@ feature is real.
   "saveOptions": {
     "annotationMode": "flatten",
     "redactionMode": "textOnly",
+    "flattenForms": false,
     "validate": true
   }
 }
@@ -28,8 +29,9 @@ feature is real.
 - Native annotation export.
 - Password-backed PDFs.
 - Existing annotation delete/replace.
+- AcroForm field fill and flatten.
 - Flow-slice reflow.
-- Future forms, signatures, sanitization, OCR, and preflight operations.
+- Future signatures, sanitization, OCR, and preflight operations.
 
 ## Validation Response
 

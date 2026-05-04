@@ -27,6 +27,7 @@ import type {
   EngineSourceText,
   ExportValidation,
   FlowedSourceText,
+  FormFieldAnnotation,
   ImageAnnotation,
   PageFlowSlice,
   PageItem,
@@ -477,7 +478,9 @@ function renderAnnotation(annotation: Annotation): Element {
   node.dataset.id = annotation.id;
   node.addEventListener("pointerdown", (event) => handleAnnotationPointerDown(event, annotation));
 
-  if (annotation.type === "text") {
+  if (annotation.type === "formField") {
+    renderFormField(annotation, node);
+  } else if (annotation.type === "text") {
     node.style.color = annotation.color;
     node.style.fontSize = `${annotation.fontSize * zoom}px`;
     node.style.fontFamily = annotation.fontFamily ?? defaultEditorFontFamily();
@@ -535,6 +538,42 @@ function renderAnnotation(annotation: Annotation): Element {
     node.append(handle);
   }
   return node;
+}
+
+function renderFormField(annotation: FormFieldAnnotation, node: HTMLDivElement): void {
+  node.classList.add("form-field", annotation.fieldType === "checkbox" ? "checkbox" : "text-field");
+  node.style.borderColor = selectedId === annotation.id ? "#176b58" : "rgba(23, 107, 88, 0.55)";
+  node.style.background = "rgba(255, 255, 255, 0.72)";
+  if (annotation.fieldType === "checkbox") {
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.checked = Boolean(annotation.checked);
+    checkbox.ariaLabel = annotation.fieldName;
+    checkbox.addEventListener("pointerdown", (event) => event.stopPropagation());
+    checkbox.addEventListener("change", () => {
+      annotation.checked = checkbox.checked;
+      annotation.fieldValue = checkbox.checked ? annotation.exportValue ?? "Yes" : "Off";
+      markAnnotationDirty(annotation);
+      commitHistory();
+      renderInspector();
+      renderCurrentLayer();
+    });
+    node.append(checkbox);
+    return;
+  }
+
+  const input = document.createElement("input");
+  input.type = "text";
+  input.value = annotation.fieldValue;
+  input.ariaLabel = annotation.fieldName;
+  input.addEventListener("pointerdown", (event) => event.stopPropagation());
+  input.addEventListener("input", () => {
+    annotation.fieldValue = input.value;
+    markAnnotationDirty(annotation);
+    syncInspectorValues(annotation);
+  });
+  input.addEventListener("blur", commitHistory);
+  node.append(input);
 }
 
 function renderPen(annotation: PenAnnotation): SVGSVGElement {
@@ -665,6 +704,16 @@ function syncInspectorValues(annotation: Annotation): void {
     boxHeight.value = `${Math.round(annotation.height * 100)}`;
   }
   if (annotation.type !== "text") {
+    if (annotation.type === "formField") {
+      const formValue = document.querySelector<HTMLInputElement>("#formValue");
+      if (formValue && document.activeElement !== formValue) {
+        formValue.value = annotation.fieldValue;
+      }
+      const formChecked = document.querySelector<HTMLInputElement>("#formChecked");
+      if (formChecked) {
+        formChecked.checked = Boolean(annotation.checked);
+      }
+    }
     return;
   }
   const textValue = document.querySelector<HTMLTextAreaElement>("#textValue");
@@ -1081,6 +1130,10 @@ function convertPdfAnnotation(
     dirty: false,
   };
 
+  if (subtype === "Widget") {
+    return convertWidgetAnnotation(raw, base);
+  }
+
   if (subtype === "FreeText") {
     return {
       ...base,
@@ -1121,6 +1174,44 @@ function convertPdfAnnotation(
     };
   }
 
+  return null;
+}
+
+function convertWidgetAnnotation(
+  raw: Record<string, unknown>,
+  base: Omit<FormFieldAnnotation, "type" | "fieldName" | "fieldType" | "fieldValue" | "checked" | "exportValue">,
+): FormFieldAnnotation | null {
+  const fieldName = String(raw.fieldName ?? base.sourceAnnotationId ?? "");
+  if (!fieldName) {
+    return null;
+  }
+  const fieldType = String(raw.fieldType ?? "");
+  if (fieldType === "Tx") {
+    return {
+      ...base,
+      type: "formField",
+      fieldName,
+      fieldType: "text",
+      fieldValue: annotationText(raw),
+      opacity: 1,
+      strokeWidth: base.strokeWidth || 1,
+    };
+  }
+  if (fieldType === "Btn" && raw.checkBox === true) {
+    const exportValue = String(raw.exportValue ?? "Yes");
+    const fieldValue = String(raw.fieldValue ?? "");
+    return {
+      ...base,
+      type: "formField",
+      fieldName,
+      fieldType: "checkbox",
+      fieldValue,
+      checked: fieldValue !== "" && fieldValue !== "Off",
+      exportValue,
+      opacity: 1,
+      strokeWidth: base.strokeWidth || 1,
+    };
+  }
   return null;
 }
 
@@ -1606,8 +1697,9 @@ function renderInspector(): void {
     ${documentControls}
     ${pageControls}
     ${selected.type === "text" ? textFields(selected) : ""}
-    ${selected.type !== "image" ? colorField(selected) : ""}
-    ${selected.type !== "text" && selected.type !== "image" ? opacityField(selected) : ""}
+    ${selected.type === "formField" ? formFieldFields(selected) : ""}
+    ${selected.type !== "image" && selected.type !== "formField" ? colorField(selected) : ""}
+    ${selected.type !== "text" && selected.type !== "image" && selected.type !== "formField" ? opacityField(selected) : ""}
     ${selected.type === "pen" || selected.type === "rect" ? strokeField(selected) : ""}
     <div class="field-row">
       <div class="field">
@@ -1678,6 +1770,27 @@ function textFields(annotation: TextAnnotation): string {
     <div class="field">
       <label>글자 크기</label>
       <input id="fontSize" type="number" min="8" max="96" step="1" value="${annotation.fontSize}" />
+    </div>
+  `;
+}
+
+function formFieldFields(annotation: FormFieldAnnotation): string {
+  const valueControl = annotation.fieldType === "checkbox"
+    ? `
+      <label class="checkbox-line">
+        <input id="formChecked" type="checkbox"${annotation.checked ? " checked" : ""} />
+        선택됨
+      </label>
+    `
+    : `<input id="formValue" type="text" value="${escapeHtml(annotation.fieldValue)}" />`;
+  return `
+    <div class="field">
+      <label>폼 필드</label>
+      <input id="formName" type="text" value="${escapeHtml(annotation.fieldName)}" disabled />
+    </div>
+    <div class="field">
+      <label>값</label>
+      ${valueControl}
     </div>
   `;
 }
@@ -1791,6 +1904,29 @@ function bindInspectorFields(annotation: Annotation): void {
       annotation.text = textValue.value;
       markAnnotationDirty(annotation);
       autoFitText(annotation);
+      commitHistory();
+      renderInspector();
+      renderCurrentLayer();
+    }
+  });
+
+  const formValue = document.querySelector<HTMLInputElement>("#formValue");
+  formValue?.addEventListener("change", () => {
+    if (annotation.type === "formField" && annotation.fieldType === "text") {
+      annotation.fieldValue = formValue.value;
+      markAnnotationDirty(annotation);
+      commitHistory();
+      renderInspector();
+      renderCurrentLayer();
+    }
+  });
+
+  const formChecked = document.querySelector<HTMLInputElement>("#formChecked");
+  formChecked?.addEventListener("change", () => {
+    if (annotation.type === "formField" && annotation.fieldType === "checkbox") {
+      annotation.checked = formChecked.checked;
+      annotation.fieldValue = formChecked.checked ? annotation.exportValue ?? "Yes" : "Off";
+      markAnnotationDirty(annotation);
       commitHistory();
       renderInspector();
       renderCurrentLayer();
@@ -2168,7 +2304,7 @@ function buildEnginePayload(bytes: Uint8Array): EnginePayload {
       if (!replacementOperation) {
         return [];
       }
-      if (annotation.sourceAnnotationId && annotation.dirty) {
+      if (annotation.sourceAnnotationId && annotation.dirty && annotation.type !== "formField") {
         return [sourceAnnotationDeleteOperation(sourceAnnotationRef(annotation), pageIndex), replacementOperation];
       }
       return [replacementOperation];
@@ -2190,6 +2326,7 @@ function buildEnginePayload(bytes: Uint8Array): EnginePayload {
     saveOptions: {
       annotationMode: saveMode,
       redactionMode,
+      flattenForms: false,
       validate: true,
     },
   };
@@ -2357,6 +2494,17 @@ function annotationToEngineOperation(annotation: Annotation, pageIndex: number):
     return {
       ...base,
       dataUrl: annotation.dataUrl,
+    };
+  }
+
+  if (annotation.type === "formField") {
+    return {
+      ...base,
+      fieldName: annotation.fieldName,
+      fieldType: annotation.fieldType,
+      fieldValue: annotation.fieldValue,
+      checked: annotation.checked,
+      exportValue: annotation.exportValue,
     };
   }
 

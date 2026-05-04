@@ -8,8 +8,8 @@ behavior is verified with fixtures and compatibility checks.
 | Core PDF compatibility | 15 | Strict local validation and qpdf are in place | 100+ corpus PDFs pass open/render/export/reopen |
 | Edit PDF | 15 | Redaction plus replacement text; new image/text objects | Text/image/vector fixtures roundtrip with 2px tolerance |
 | Page organization | 8 | Delete, reorder, rotate, duplicate, extract | Merge/split/crop/replace plus bookmarks/links/forms remap |
-| Comments/annotations | 8 | New annotations; existing import starts in this phase | Acrobat/Preview/Chrome annotations import/edit/delete/flatten |
-| Forms | 10 | Not implemented | AcroForm fields fill/save/flatten with appearance regeneration |
+| Comments/annotations | 8 | New annotations plus existing Square/FreeText/Highlight/Ink import/edit/delete path | Acrobat/Preview/Chrome annotations import/edit/delete/flatten |
+| Forms | 10 | AcroForm text and checkbox fill/save, engine flatten path | AcroForm fields fill/save/flatten with appearance regeneration |
 | Signatures/security | 10 | Password-aware open/apply only | Image signatures and certificate signing validate in Acrobat |
 | Redaction/sanitization | 10 | Redaction policies tested | Hidden information sanitizer removes metadata/XMP/JS/attachments |
 | OCR/conversion | 8 | Not implemented | Searchable scanned PDFs with OCR correction |
@@ -21,5 +21,6 @@ behavior is verified with fixtures and compatibility checks.
 ## Current Score
 
 The current project is a verified advanced prototype, not an Acrobat Pro
-replacement. It scores highest in save validation and lowest in forms,
-signatures, OCR, accessibility, and preflight.
+replacement. It scores highest in save validation and is now beginning the
+forms and imported-annotation lanes; signatures, OCR, accessibility, and
+preflight remain mostly unimplemented.

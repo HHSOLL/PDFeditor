@@ -27,13 +27,15 @@ without broken layout or hidden stale data.
 - Flattened and native annotation export where safe.
 - Page reorder, duplicate, rotate, extract, and mixed page sizes.
 - Password-aware open/extract/apply flow.
+- AcroForm text field and checkbox fill/save; engine flatten is supported by
+  contract tests.
 
 ## Explicitly Limited Until Implemented
 
 - Full inline content-stream text editing.
 - OCR-backed scanned PDF editing.
 - Certificate digital signatures.
-- XFA forms.
+- XFA forms and advanced AcroForm scripts/calculations.
 - PDF/A/PDF/X preflight fixups.
 - PDF/UA accessibility repair.
 

@@ -72,6 +72,23 @@ async function createExistingAnnotationPdf(filePath: string): Promise<void> {
   );
 }
 
+async function createFormPdf(filePath: string): Promise<void> {
+  await fs.mkdir(path.dirname(filePath), { recursive: true });
+  const document = await PDFDocument.create();
+  const page = document.addPage([612, 792]);
+  const font = await document.embedFont(StandardFonts.Helvetica);
+  page.drawText("Name:", { x: 72, y: 700, size: 12, font });
+  page.drawText("Agree:", { x: 72, y: 654, size: 12, font });
+  const form = document.getForm();
+  const name = form.createTextField("name");
+  name.setText("Alice");
+  name.addToPage(page, { x: 120, y: 690, width: 200, height: 24 });
+  const agree = form.createCheckBox("agree");
+  agree.addToPage(page, { x: 120, y: 650, width: 16, height: 16 });
+  agree.check();
+  await fs.writeFile(filePath, await document.save());
+}
+
 async function annotationCount(filePath: string): Promise<number> {
   const stdout = await runPython(
     [
@@ -83,6 +100,23 @@ async function annotationCount(filePath: string): Promise<number> {
     [filePath],
   );
   return Number(stdout.trim());
+}
+
+async function widgetValues(filePath: string): Promise<Record<string, string>> {
+  const stdout = await runPython(
+    [
+      "import fitz, json, sys",
+      "doc = fitz.open(sys.argv[1])",
+      "values = {}",
+      "for page in doc:",
+      "    for widget in page.widgets() or []:",
+      "        values[widget.field_name] = widget.field_value",
+      "print(json.dumps(values, ensure_ascii=False))",
+      "doc.close()",
+    ].join("\n"),
+    [filePath],
+  );
+  return JSON.parse(stdout) as Record<string, string>;
 }
 
 test("selects multi-line PDF text as one editable paragraph without repainting the canvas", async ({
@@ -235,6 +269,33 @@ test("imports existing PDF annotations and exports real annotation deletion", as
   await download.saveAs(exportedPath);
 
   expect(await annotationCount(exportedPath)).toBe(0);
+});
+
+test("fills imported AcroForm text and checkbox fields through the engine", async ({
+  page,
+}) => {
+  const samplePath = path.resolve("tmp/sample-form.pdf");
+  const exportedPath = path.resolve("tmp/exported-form.pdf");
+  await createFormPdf(samplePath);
+  expect(await widgetValues(samplePath)).toEqual({ agree: "Yes", name: "Alice" });
+
+  await page.goto("http://127.0.0.1:5173/");
+  await page
+    .locator('input[type="file"][accept="application/pdf"]')
+    .setInputFiles(samplePath);
+
+  await expect(page.locator(".annotation.form-field")).toHaveCount(2);
+  await page.locator(".annotation.form-field.text-field input").fill("Carol Form");
+  const checkbox = page.locator(".annotation.form-field.checkbox input");
+  await expect(checkbox).toBeChecked();
+  await checkbox.uncheck();
+
+  const downloadPromise = page.waitForEvent("download");
+  await page.getByRole("button", { name: "PDF 내보내기" }).click();
+  const download = await downloadPromise;
+  await download.saveAs(exportedPath);
+
+  expect(await widgetValues(exportedPath)).toEqual({ agree: "Off", name: "Carol Form" });
 });
 
 test("blocks engine-required export when the PDF engine is unavailable", async ({ page }) => {

@@ -1,7 +1,7 @@
 import type { PDFFont } from "pdf-lib";
 
 export type Tool = "select" | "text" | "highlight" | "rect" | "redact" | "pen";
-export type AnnotationType = Tool | "image";
+export type AnnotationType = Tool | "image" | "formField";
 export type EngineOperationType = AnnotationType | "flowSlice" | "deleteAnnotation";
 export type SaveMode = "flatten" | "native";
 export type RedactionMode = "textOnly" | "visualArea" | "imagesAndText";
@@ -68,11 +68,20 @@ export interface PenAnnotation extends AnnotationBase {
   points: Point[];
 }
 
+export interface FormFieldAnnotation extends AnnotationBase {
+  type: "formField";
+  fieldName: string;
+  fieldType: "text" | "checkbox";
+  fieldValue: string;
+  checked?: boolean;
+  exportValue?: string;
+}
+
 export type BoxAnnotation = AnnotationBase & {
   type: "highlight" | "rect" | "redact";
 };
 
-export type Annotation = TextAnnotation | ImageAnnotation | PenAnnotation | BoxAnnotation;
+export type Annotation = TextAnnotation | ImageAnnotation | PenAnnotation | FormFieldAnnotation | BoxAnnotation;
 
 export interface Snapshot {
   annotations: Annotation[];
@@ -180,6 +189,11 @@ export interface EngineOperation {
   };
   points?: Point[];
   dataUrl?: string;
+  fieldName?: string;
+  fieldType?: string;
+  fieldValue?: string;
+  checked?: boolean;
+  exportValue?: string;
 }
 
 export interface EngineSourceText {
@@ -205,6 +219,7 @@ export interface EnginePayload {
   saveOptions: {
     annotationMode: SaveMode;
     redactionMode: RedactionMode;
+    flattenForms?: boolean;
     validate: boolean;
   };
 }

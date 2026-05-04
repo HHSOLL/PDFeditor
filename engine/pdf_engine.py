@@ -53,11 +53,17 @@ class Operation(TypedDict, total=False):
     fontName: str
     sourceAnnotationId: str
     annotationSubtype: str
+    fieldName: str
+    fieldType: str
+    fieldValue: str
+    checked: bool
+    exportValue: str
 
 
 class SaveOptions(TypedDict, total=False):
     annotationMode: str
     redactionMode: str
+    flattenForms: bool
     validate: bool
 
 
@@ -204,11 +210,14 @@ def apply_operations(
             page = output[page_index]
             metrics = PageMetrics(page.rect.width, page.rect.height)
             apply_annotation_delete_phase(page, page_operations, metrics)
+            apply_form_field_phase(page, page_operations, metrics)
             flow_slice_images = render_flow_slice_images(page, page_operations, metrics)
             apply_redaction_phase(page, page_operations, metrics, save_options)
             apply_insert_phase(page, page_operations, metrics, font_path, flow_slice_images, save_options)
 
         apply_metadata(output, payload.get("metadata"))
+        if save_options.get("flattenForms", False):
+            output.bake(annots=False, widgets=True)
         buffer = io.BytesIO()
         output.save(buffer, garbage=4, deflate=True, clean=True)
         edited = buffer.getvalue()
@@ -239,6 +248,7 @@ def normalize_save_options(value: Any) -> SaveOptions:
     return {
         "annotationMode": "native" if mode == "native" else "flatten",
         "redactionMode": redaction_mode,
+        "flattenForms": bool(value.get("flattenForms", False)),
         "validate": bool(value.get("validate", True)),
     }
 
@@ -288,7 +298,7 @@ def validate_operations(value: Any, page_count: int) -> list[Operation]:
         page_index = int(raw.get("pageIndex", -1))
         if page_index < 0 or page_index >= page_count:
             continue
-        if op_type not in {"text", "highlight", "rect", "redact", "pen", "image", "flowSlice", "deleteAnnotation"}:
+        if op_type not in {"text", "highlight", "rect", "redact", "pen", "image", "flowSlice", "deleteAnnotation", "formField"}:
             continue
         operation: Operation = dict(raw)  # type: ignore[assignment]
         operation["type"] = op_type
@@ -316,10 +326,60 @@ def apply_annotation_delete_phase(
         target_rect = to_rect(operation, metrics)
         subtype = str(operation.get("annotationSubtype", ""))
         source_id = str(operation.get("sourceAnnotationId", ""))
+        if subtype == "Widget":
+            for widget in list(page.widgets() or []):
+                if widget_matches_delete_operation(widget, target_rect, source_id):
+                    page.delete_widget(widget)
+                    break
+            continue
         for annotation in list(page.annots() or []):
             if annotation_matches_delete_operation(annotation, target_rect, subtype, source_id):
                 page.delete_annot(annotation)
                 break
+
+
+def widget_matches_delete_operation(widget: fitz.Widget, target_rect: fitz.Rect, source_id: str) -> bool:
+    if source_id and source_id in {str(widget.xref), f"{widget.xref}R"}:
+        return True
+    return rects_match(widget.rect, target_rect)
+
+
+def apply_form_field_phase(
+    page: fitz.Page,
+    operations: list[Operation],
+    metrics: PageMetrics,
+) -> None:
+    form_operations = [operation for operation in operations if operation["type"] == "formField"]
+    if not form_operations:
+        return
+    for operation in form_operations:
+        target_rect = to_rect(operation, metrics)
+        field_name = str(operation.get("fieldName", ""))
+        for widget in page.widgets() or []:
+            if not widget_matches_form_operation(widget, target_rect, field_name):
+                continue
+            update_widget_value(widget, operation)
+            break
+
+
+def widget_matches_form_operation(widget: fitz.Widget, target_rect: fitz.Rect, field_name: str) -> bool:
+    if field_name and widget.field_name == field_name:
+        return True
+    return rects_match(widget.rect, target_rect)
+
+
+def update_widget_value(widget: fitz.Widget, operation: Operation) -> None:
+    field_type = str(operation.get("fieldType", ""))
+    if field_type == "checkbox":
+        checked = bool(operation.get("checked", False))
+        if checked:
+            widget.field_value = widget.on_state() or str(operation.get("exportValue", "Yes"))
+        else:
+            widget.field_value = "Off"
+        widget.update()
+        return
+    widget.field_value = str(operation.get("fieldValue", ""))
+    widget.update()
 
 
 def annotation_matches_delete_operation(
@@ -423,7 +483,7 @@ def apply_insert_phase(
     native_annotations = save_options.get("annotationMode") == "native"
     for operation in operations:
         op_type = operation["type"]
-        if op_type == "deleteAnnotation":
+        if op_type in {"deleteAnnotation", "formField"}:
             continue
         if native_annotations and is_native_annotation_candidate(operation, font_path):
             insert_native_annotation(page, operation, metrics, font_path)

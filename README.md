@@ -15,6 +15,9 @@ It is designed around a real save pipeline, not screenshot export:
 - Select existing PDF text blocks and replace them with auto-fit text boxes
 - Live source masking and reflow slices to avoid duplicate original text
 - Add text, images, highlights, rectangles, redactions, and ink
+- Import existing FreeText, highlight-like, square, ink, and AcroForm text/checkbox widgets for editing
+- Delete imported PDF annotations through the PyMuPDF engine instead of hiding them in the browser
+- Fill AcroForm text fields and checkboxes, with engine-level form flatten support
 - Undo and redo command snapshots
 - Password-protected PDF open flow
 - Document metadata editing
@@ -62,8 +65,8 @@ npm run test:e2e -- --reporter=list
 npm audit --audit-level=moderate
 ```
 
-`test:engine` runs the engine smoke, redaction policy, render-diff, and page
-operation roundtrip tests.
+`test:engine` runs the engine smoke, annotation, form, redaction policy,
+render-diff, and page operation roundtrip tests.
 
 ## Architecture
 
@@ -72,6 +75,10 @@ See:
 - [docs/architecture.md](docs/architecture.md)
 - [docs/save-pipeline.md](docs/save-pipeline.md)
 - [docs/pdf-coordinate-system.md](docs/pdf-coordinate-system.md)
+- [docs/product-spec.md](docs/product-spec.md)
+- [docs/acrobat-parity-matrix.md](docs/acrobat-parity-matrix.md)
+- [docs/engine-contract.md](docs/engine-contract.md)
+- [docs/release-gates.md](docs/release-gates.md)
 
 ## License Notes
 
