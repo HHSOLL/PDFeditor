@@ -53,6 +53,7 @@ class Operation(TypedDict, total=False):
     fontName: str
     sourceAnnotationId: str
     annotationSubtype: str
+    sourceImageId: str
     fieldName: str
     fieldType: str
     fieldValue: str
@@ -153,6 +154,7 @@ def extract_document(document: fitz.Document) -> dict[str, Any]:
         rect = page.rect
         text = page.get_text("dict", flags=fitz.TEXT_PRESERVE_LIGATURES)
         spans: list[dict[str, Any]] = []
+        images: list[dict[str, Any]] = []
         for block in text.get("blocks", []):
             if block.get("type") != 0:
                 continue
@@ -175,6 +177,32 @@ def extract_document(document: fitz.Document) -> dict[str, Any]:
                             "color": int_to_hex(int(span.get("color", 0))),
                         }
                     )
+        seen_images: set[tuple[int, int, int, int, int]] = set()
+        for image_index, image in enumerate(page.get_images(full=True)):
+            xref = int(image[0])
+            for rect_index, image_rect in enumerate(page.get_image_rects(xref)):
+                if image_rect.is_empty or rect.width <= 0 or rect.height <= 0:
+                    continue
+                key = (
+                    xref,
+                    round(image_rect.x0 * 100),
+                    round(image_rect.y0 * 100),
+                    round(image_rect.x1 * 100),
+                    round(image_rect.y1 * 100),
+                )
+                if key in seen_images:
+                    continue
+                seen_images.add(key)
+                images.append(
+                    {
+                        "id": f"{page_index}:{xref}:{image_index}:{rect_index}",
+                        "xref": xref,
+                        "x": clamp_float(image_rect.x0 / rect.width, 0, 1),
+                        "y": clamp_float(image_rect.y0 / rect.height, 0, 1),
+                        "width": clamp_float((image_rect.x1 - image_rect.x0) / rect.width, 0, 1),
+                        "height": clamp_float((image_rect.y1 - image_rect.y0) / rect.height, 0, 1),
+                    }
+                )
         pages.append(
             {
                 "index": page_index,
@@ -182,6 +210,7 @@ def extract_document(document: fitz.Document) -> dict[str, Any]:
                 "height": rect.height,
                 "rotation": page.rotation,
                 "spans": spans,
+                "images": images,
             }
         )
     return {"pages": pages}
@@ -301,7 +330,7 @@ def validate_operations(value: Any, page_count: int) -> list[Operation]:
         page_index = int(raw.get("pageIndex", -1))
         if page_index < 0 or page_index >= page_count:
             continue
-        if op_type not in {"text", "highlight", "rect", "redact", "pen", "image", "flowSlice", "deleteAnnotation", "formField"}:
+        if op_type not in {"text", "highlight", "rect", "redact", "pen", "image", "flowSlice", "deleteAnnotation", "deleteImage", "formField"}:
             continue
         operation: Operation = dict(raw)  # type: ignore[assignment]
         operation["type"] = op_type
@@ -431,6 +460,7 @@ def apply_redaction_phase(
     save_options: SaveOptions,
 ) -> None:
     has_redactions = False
+    force_image_removal = False
     for operation in operations:
         if operation["type"] == "text" and isinstance(operation.get("eraseOriginal"), dict):
             edit_rect = to_rect(operation, metrics)
@@ -452,12 +482,18 @@ def apply_redaction_phase(
         elif operation["type"] == "redact":
             page.add_redact_annot(to_rect(operation, metrics), fill=(1, 1, 1))
             has_redactions = True
+        elif operation["type"] == "deleteImage":
+            page.add_redact_annot(to_rect(operation, metrics), fill=(1, 1, 1))
+            has_redactions = True
+            force_image_removal = True
         elif operation["type"] == "flowSlice":
             page.add_redact_annot(flow_slice_source_rect(operation, metrics), fill=(1, 1, 1))
             has_redactions = True
 
     if has_redactions:
         image_policy, graphics_policy = redaction_policy(save_options)
+        if force_image_removal:
+            image_policy = fitz.PDF_REDACT_IMAGE_REMOVE
         page.apply_redactions(
             images=image_policy,
             graphics=graphics_policy,
@@ -486,7 +522,7 @@ def apply_insert_phase(
     native_annotations = save_options.get("annotationMode") == "native"
     for operation in operations:
         op_type = operation["type"]
-        if op_type in {"deleteAnnotation", "formField"}:
+        if op_type in {"deleteAnnotation", "deleteImage", "formField"}:
             continue
         if native_annotations and is_native_annotation_candidate(operation, font_path):
             insert_native_annotation(page, operation, metrics, font_path)
@@ -794,6 +830,10 @@ def int_to_hex(value: int) -> str:
 
 
 def clamp_int(value: int, minimum: int, maximum: int) -> int:
+    return max(minimum, min(maximum, value))
+
+
+def clamp_float(value: float, minimum: float, maximum: float) -> float:
     return max(minimum, min(maximum, value))
 
 

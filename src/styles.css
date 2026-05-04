@@ -373,6 +373,21 @@ button {
   background: rgba(26, 115, 184, 0.08);
 }
 
+.source-image {
+  position: absolute;
+  z-index: 2;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 2px;
+  background: transparent;
+  cursor: crosshair;
+}
+
+.source-image:hover {
+  border-color: #b42318;
+  background: rgba(180, 35, 24, 0.08);
+}
+
 .annotation.text {
   z-index: 3;
   display: flex;

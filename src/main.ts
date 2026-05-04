@@ -39,6 +39,7 @@ import type {
   SaveMode,
   Snapshot,
   SourceAnnotationRef,
+  SourceImageItem,
   SourceMask,
   SourceTextItem,
   TextAnnotation,
@@ -57,6 +58,7 @@ let pageItems: PageItem[] = [];
 let annotations: Annotation[] = [];
 let deletedSourceAnnotations: SourceAnnotationRef[] = [];
 let sourceTextItemsByPage = new Map<string, SourceTextItem[]>();
+let sourceImageItemsByPage = new Map<string, SourceImageItem[]>();
 let pageCanvasSnapshots = new Map<string, string>();
 let documentMetadata: DocumentMetadata = emptyMetadata();
 let saveMode: SaveMode = "flatten";
@@ -98,6 +100,20 @@ type PdfPageViewport = {
 };
 
 type NormalizedRect = Pick<SourceAnnotationRef, "x" | "y" | "width" | "height">;
+type EngineExtractImage = {
+  id: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+};
+type EngineExtractPage = {
+  index: number;
+  images?: EngineExtractImage[];
+};
+type EngineExtractResponse = {
+  pages: EngineExtractPage[];
+};
 
 function renderApp(): void {
   appRoot.innerHTML = `
@@ -272,6 +288,7 @@ async function loadPdf(file: File): Promise<void> {
   annotations = [];
   deletedSourceAnnotations = [];
   sourceTextItemsByPage = new Map();
+  sourceImageItemsByPage = new Map();
   pageCanvasSnapshots = new Map();
   documentMetadata = await readDocumentMetadata(pdfDocument);
   saveMode = "flatten";
@@ -279,6 +296,7 @@ async function loadPdf(file: File): Promise<void> {
   selectedId = null;
   currentPageId = pageItems[0]?.id ?? null;
   await cacheSourceTextItems();
+  await cacheSourceImageItems(bytes);
   await importExistingAnnotations();
   undoStack = [makeSnapshot()];
   redoStack = [];
@@ -670,6 +688,26 @@ function renderSourceTextItem(item: SourceTextItem): HTMLButtonElement {
   return button;
 }
 
+function renderSourceImageItem(item: SourceImageItem): HTMLButtonElement {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "source-image";
+  button.ariaLabel = "기존 PDF 이미지 삭제 대상으로 선택";
+  button.style.left = `${item.x * pageWidth}px`;
+  button.style.top = `${item.y * pageHeight}px`;
+  button.style.width = `${item.width * pageWidth}px`;
+  button.style.height = `${item.height * pageHeight}px`;
+  button.title = "기존 PDF 이미지 삭제";
+  button.addEventListener("pointerdown", (event) => {
+    if (currentTool !== "select") {
+      return;
+    }
+    event.stopPropagation();
+    convertSourceImageToRedaction(item);
+  });
+  return button;
+}
+
 function renderCurrentLayer(): void {
   const item = currentPage();
   const layer = document.querySelector<HTMLElement>(".annotation-layer");
@@ -685,12 +723,15 @@ function refreshFlowEffects(): void {
   if (!item || !layer) {
     return;
   }
-  layer.querySelectorAll(".source-mask, .source-text, .flow-slice").forEach((node) => node.remove());
+  layer.querySelectorAll(".source-mask, .source-text, .source-image, .flow-slice").forEach((node) => node.remove());
   const flowSlices = pageFlowSlicesForPage(item.id);
   const flowNodes = [
     ...sourceMasksForPage(item.id).map(renderSourceMask),
     ...flowSlices.map(renderPageFlowSlice),
     ...(flowSlices.length > 0 ? [] : flowedSourceTextsForPage(item.id).map(renderFlowedSourceText)),
+    ...(sourceImageItemsByPage.get(item.id) ?? [])
+      .filter((sourceImage) => !isSourceImageAlreadyEdited(sourceImage.id))
+      .map(renderSourceImageItem),
     ...(sourceTextItemsByPage.get(item.id) ?? [])
       .filter((sourceText) => !isSourceTextAlreadyEdited(sourceText.id) && sourceTextFlowOffset(sourceText) === 0)
       .map(renderSourceTextItem),
@@ -742,6 +783,12 @@ function renderLayerContents(layer: HTMLElement, item: PageItem): void {
   for (const sourceText of sourceTextItemsByPage.get(item.id) ?? []) {
     if (!isSourceTextAlreadyEdited(sourceText.id) && sourceTextFlowOffset(sourceText) === 0) {
       layer.append(renderSourceTextItem(sourceText));
+    }
+  }
+
+  for (const sourceImage of sourceImageItemsByPage.get(item.id) ?? []) {
+    if (!isSourceImageAlreadyEdited(sourceImage.id)) {
+      layer.append(renderSourceImageItem(sourceImage));
     }
   }
 
@@ -1076,6 +1123,52 @@ async function cacheSourceTextItems(): Promise<void> {
     }
 
     sourceTextItemsByPage.set(pageItem.id, mergeTextItemsIntoBlocks(sourceItems));
+  }
+}
+
+async function cacheSourceImageItems(bytes: Uint8Array): Promise<void> {
+  sourceImageItemsByPage = new Map();
+  const endpoints = buildEngineEndpoints("/api/pdf/extract");
+  for (const endpoint of endpoints) {
+    try {
+      const response = await fetch(endpoint, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          pdfBase64: bytesToBase64(bytes),
+          password: openPassword || undefined,
+        }),
+      });
+      if (!response.ok) {
+        continue;
+      }
+      const result: unknown = await response.json();
+      if (!isEngineExtractResponse(result)) {
+        continue;
+      }
+      const pagesByIndex = new Map(result.pages.map((page) => [page.index, page]));
+      for (const pageItem of pageItems) {
+        const page = pagesByIndex.get(pageItem.sourceIndex);
+        const images = page?.images ?? [];
+        sourceImageItemsByPage.set(
+          pageItem.id,
+          images.map((image, index) => ({
+            id: `${pageItem.id}:image-${index}`,
+            pageId: pageItem.id,
+            sourceImageId: image.id,
+            x: clamp(image.x, 0, 0.999),
+            y: clamp(image.y, 0, 0.999),
+            width: clamp(image.width, 0.001, 1),
+            height: clamp(image.height, 0.001, 1),
+          })),
+        );
+      }
+      return;
+    } catch (error) {
+      console.warn(`PDF engine image extraction failed at ${endpoint}`, error);
+    }
   }
 }
 
@@ -1415,6 +1508,12 @@ function isSourceTextAlreadyEdited(sourceTextId: string): boolean {
   );
 }
 
+function isSourceImageAlreadyEdited(sourceImageItemId: string): boolean {
+  return annotations.some(
+    (annotation) => annotation.sourceImageId === sourceImageItemId,
+  );
+}
+
 function pageHasSourceTextEdit(pageId: string): boolean {
   return annotations.some(
     (annotation) => annotation.pageId === pageId && annotation.type === "text" && Boolean(annotation.sourceTextId),
@@ -1447,6 +1546,31 @@ function sourceTextToAnnotation(sourceText: SourceTextItem): TextAnnotation {
     reflowable: sourceText.reflowable,
     sourceTextId: sourceText.id,
   };
+}
+
+function convertSourceImageToRedaction(item: SourceImageItem): void {
+  if (isSourceImageAlreadyEdited(item.id)) {
+    return;
+  }
+  const annotation: BoxAnnotation = {
+    id: crypto.randomUUID(),
+    pageId: item.pageId,
+    type: "redact",
+    x: item.x,
+    y: item.y,
+    width: item.width,
+    height: item.height,
+    color: "#ffffff",
+    opacity: 1,
+    strokeWidth: 1,
+    sourceImageId: item.id,
+    dirty: true,
+  };
+  annotations.push(annotation);
+  selectedId = annotation.id;
+  commitHistory();
+  renderInspector();
+  renderCurrentLayer();
 }
 
 function handleLayerPointerMove(event: PointerEvent): void {
@@ -2041,6 +2165,7 @@ function duplicateCurrentPage(): void {
   };
   pageItems.splice(index + 1, 0, copy);
   cloneSourceTextItemsForPage(source.id, copy.id);
+  cloneSourceImageItemsForPage(source.id, copy.id);
   const copiedAnnotations = annotations
     .filter((annotation) => annotation.pageId === source.id)
     .map((annotation) => {
@@ -2054,6 +2179,7 @@ function duplicateCurrentPage(): void {
       }
       delete cloned.sourceAnnotationId;
       delete cloned.sourceAnnotationSubtype;
+      delete cloned.sourceImageId;
       cloned.dirty = true;
       return cloned;
     });
@@ -2071,6 +2197,18 @@ function cloneSourceTextItemsForPage(sourcePageId: string, targetPageId: string)
     sourceItems.map((item, index) => ({
       ...item,
       id: `${targetPageId}:block-${index}`,
+      pageId: targetPageId,
+    })),
+  );
+}
+
+function cloneSourceImageItemsForPage(sourcePageId: string, targetPageId: string): void {
+  const sourceItems = sourceImageItemsByPage.get(sourcePageId) ?? [];
+  sourceImageItemsByPage.set(
+    targetPageId,
+    sourceItems.map((item, index) => ({
+      ...item,
+      id: `${targetPageId}:image-${index}`,
       pageId: targetPageId,
     })),
   );
@@ -2106,6 +2244,7 @@ function duplicateSelected(): void {
   }
   delete copy.sourceAnnotationId;
   delete copy.sourceAnnotationSubtype;
+  delete copy.sourceImageId;
   copy.dirty = true;
   copy.x = clamp(copy.x + 0.02, 0, 1 - copy.width);
   copy.y = clamp(copy.y + 0.02, 0, 1 - copy.height);
@@ -2241,6 +2380,9 @@ function requiresPdfEngineForSafeExport(): boolean {
     Boolean(openPassword) ||
     deletedSourceAnnotations.length > 0 ||
     annotations.some((annotation) => {
+      if (annotation.sourceImageId) {
+        return true;
+      }
       if (annotation.sourceAnnotationId) {
         return true;
       }
@@ -2478,6 +2620,14 @@ function annotationToEngineOperation(annotation: Annotation, pageIndex: number):
     strokeWidth: annotation.strokeWidth,
   };
 
+  if (annotation.sourceImageId && annotation.type === "redact") {
+    return {
+      ...base,
+      type: "deleteImage",
+      sourceImageId: annotation.sourceImageId,
+    };
+  }
+
   if (annotation.type === "text") {
     return {
       ...base,
@@ -2524,6 +2674,41 @@ function isEngineApplyResponse(value: unknown): value is EngineApplyResponse {
     value !== null &&
     typeof (value as Record<string, unknown>).pdfBase64 === "string"
   );
+}
+
+function isEngineExtractResponse(value: unknown): value is EngineExtractResponse {
+  if (typeof value !== "object" || value === null) {
+    return false;
+  }
+  const pages = (value as Record<string, unknown>).pages;
+  if (!Array.isArray(pages)) {
+    return false;
+  }
+  return pages.every((rawPage) => {
+    if (typeof rawPage !== "object" || rawPage === null) {
+      return false;
+    }
+    const page = rawPage as Record<string, unknown>;
+    const images = page.images;
+    return (
+      typeof page.index === "number" &&
+      (images === undefined ||
+        (Array.isArray(images) &&
+          images.every((rawImage) => {
+            if (typeof rawImage !== "object" || rawImage === null) {
+              return false;
+            }
+            const image = rawImage as Record<string, unknown>;
+            return (
+              typeof image.id === "string" &&
+              typeof image.x === "number" &&
+              typeof image.y === "number" &&
+              typeof image.width === "number" &&
+              typeof image.height === "number"
+            );
+          })))
+    );
+  });
 }
 
 async function validateExportedPdf(bytes: Uint8Array, expectedPageCount: number): Promise<ExportValidation> {

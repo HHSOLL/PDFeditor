@@ -2,7 +2,7 @@ import type { PDFFont } from "pdf-lib";
 
 export type Tool = "select" | "text" | "highlight" | "rect" | "redact" | "pen";
 export type AnnotationType = Tool | "image" | "formField";
-export type EngineOperationType = AnnotationType | "flowSlice" | "deleteAnnotation";
+export type EngineOperationType = AnnotationType | "flowSlice" | "deleteAnnotation" | "deleteImage";
 export type SaveMode = "flatten" | "native";
 export type RedactionMode = "textOnly" | "visualArea" | "imagesAndText";
 
@@ -39,6 +39,7 @@ export interface AnnotationBase {
   strokeWidth: number;
   sourceAnnotationId?: string;
   sourceAnnotationSubtype?: string;
+  sourceImageId?: string;
   dirty?: boolean;
 }
 
@@ -97,6 +98,16 @@ export interface SourceAnnotationRef {
   sourceAnnotationId: string;
   pageId: string;
   subtype: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export interface SourceImageItem {
+  id: string;
+  pageId: string;
+  sourceImageId: string;
   x: number;
   y: number;
   width: number;
@@ -181,6 +192,7 @@ export interface EngineOperation {
   lineHeight?: number;
   sourceAnnotationId?: string;
   annotationSubtype?: string;
+  sourceImageId?: string;
   eraseOriginal?: {
     x: number;
     y: number;

@@ -119,6 +119,31 @@ async function widgetValues(filePath: string): Promise<Record<string, string>> {
   return JSON.parse(stdout) as Record<string, string>;
 }
 
+async function extractPdfText(filePath: string): Promise<string> {
+  return runPython(
+    [
+      "import fitz, sys",
+      "doc = fitz.open(sys.argv[1])",
+      "print('\\n'.join(page.get_text('text') for page in doc))",
+      "doc.close()",
+    ].join("\n"),
+    [filePath],
+  );
+}
+
+async function pageImageCounts(filePath: string): Promise<number[]> {
+  const stdout = await runPython(
+    [
+      "import fitz, json, sys",
+      "doc = fitz.open(sys.argv[1])",
+      "print(json.dumps([len(page.get_images(full=True)) for page in doc]))",
+      "doc.close()",
+    ].join("\n"),
+    [filePath],
+  );
+  return JSON.parse(stdout) as number[];
+}
+
 test("selects multi-line PDF text as one editable paragraph without repainting the canvas", async ({
   page,
 }) => {
@@ -208,6 +233,47 @@ test("edits existing PDF text with auto reflow and exports real PDF text", async
   expect(exportedText).toContain("수정된계약제목입니다");
   expect(exportedText).toContain("글씨크기");
   await expect(page.locator(".source-text", { hasText: "Original contract title" })).toHaveCount(0);
+});
+
+test("edits and exports the repository ex.pdf without losing page structure", async ({
+  page,
+}) => {
+  const samplePath = path.resolve("ex.pdf");
+  const exportedPath = path.resolve("tmp/exported-ex.pdf");
+  const originalTitle = "Synthetic Computers at Scale for Long-Horizon Productivity Simulation";
+  const replacementTitle = "EX PDF UI 검증 제목";
+  await fs.access(samplePath);
+  const sourceImageCounts = await pageImageCounts(samplePath);
+
+  await page.goto("http://127.0.0.1:5173/");
+  await page
+    .locator('input[type="file"][accept="application/pdf"]')
+    .setInputFiles(samplePath);
+  await expect(page.locator("#pageCount")).toHaveText("33쪽", { timeout: 45_000 });
+  const titleBlock = page.locator(".source-text", { hasText: "Synthetic Computers at Scale" }).first();
+  await expect(titleBlock).toBeVisible({ timeout: 45_000 });
+
+  await titleBlock.click();
+  const editor = page.locator(".annotation.text textarea");
+  await expect(editor).toBeVisible();
+  await editor.fill(replacementTitle);
+  const firstSourceImage = page.locator(".source-image").first();
+  await expect(firstSourceImage).toBeVisible({ timeout: 45_000 });
+  await firstSourceImage.click();
+  await expect(page.locator(".annotation.redact").first()).toBeVisible();
+
+  const downloadPromise = page.waitForEvent("download", { timeout: 120_000 });
+  await page.getByRole("button", { name: "PDF 내보내기" }).click();
+  const download = await downloadPromise;
+  await download.saveAs(exportedPath);
+
+  const exported = await PDFDocument.load(await fs.readFile(exportedPath));
+  expect(exported.getPageCount()).toBe(33);
+  const text = await extractPdfText(exportedPath);
+  expect(text).toContain(replacementTitle);
+  expect(text).not.toContain(originalTitle);
+  const exportedImageCounts = await pageImageCounts(exportedPath);
+  expect(exportedImageCounts[0]).toBeLessThan(sourceImageCounts[0]);
 });
 
 test("saves metadata and duplicated pages through the advanced save pipeline", async ({
