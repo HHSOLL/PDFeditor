@@ -30,6 +30,7 @@ feature is real.
 - Password-backed PDFs.
 - Existing annotation delete/replace.
 - AcroForm field fill and flatten.
+- Existing annotation flatten when `annotationMode` is `flatten`.
 - Flow-slice reflow.
 - Future signatures, sanitization, OCR, and preflight operations.
 

@@ -6,6 +6,7 @@ const root = process.cwd();
 const workDir = path.join(root, "tmp", "engine-annotations");
 const inputPath = path.join(workDir, "input.pdf");
 const outputPath = path.join(workDir, "output.pdf");
+const flattenedPath = path.join(workDir, "flattened.pdf");
 
 await fs.rm(workDir, { force: true, recursive: true });
 await fs.mkdir(workDir, { recursive: true });
@@ -78,6 +79,32 @@ if (after.length !== 1 || after[0].type !== "Square") {
 const validation = await validatePdf(outputPath);
 if (!validation.ok || validation.annotationCount !== 1) {
   throw new Error(`annotation output failed validation: ${JSON.stringify(validation)}`);
+}
+
+await applyEngine(inputPath, flattenedPath, {
+  pages: [{ sourceIndex: 0, rotation: 0 }],
+  operations: [],
+  metadata: {
+    title: "Annotation flatten",
+    author: "PDF Studio",
+    subject: "Existing annotation flatten",
+    keywords: "pdf,annotation,flatten",
+    creator: "PDF Studio",
+    producer: "PDF Studio Engine",
+  },
+  saveOptions: {
+    annotationMode: "flatten",
+    redactionMode: "textOnly",
+    validate: true,
+  },
+}, "annotation-flatten");
+const flattened = await readAnnotations(flattenedPath);
+if (flattened.length !== 0) {
+  throw new Error(`flatten mode should bake existing annotations into page content: ${JSON.stringify(flattened)}`);
+}
+const flattenedValidation = await validatePdf(flattenedPath);
+if (!flattenedValidation.ok || flattenedValidation.annotationCount !== 0) {
+  throw new Error(`flattened annotation output failed validation: ${JSON.stringify(flattenedValidation)}`);
 }
 
 async function createAnnotatedPdf(filePath) {

@@ -17,6 +17,7 @@ It is designed around a real save pipeline, not screenshot export:
 - Add text, images, highlights, rectangles, redactions, and ink
 - Import existing FreeText, highlight-like, square, ink, and AcroForm text/checkbox widgets for editing
 - Delete imported PDF annotations through the PyMuPDF engine instead of hiding them in the browser
+- Flatten existing PDF annotations into page content in flattened export mode
 - Fill AcroForm text fields and checkboxes, with engine-level form flatten support
 - Undo and redo command snapshots
 - Password-protected PDF open flow

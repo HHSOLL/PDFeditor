@@ -216,8 +216,11 @@ def apply_operations(
             apply_insert_phase(page, page_operations, metrics, font_path, flow_slice_images, save_options)
 
         apply_metadata(output, payload.get("metadata"))
-        if save_options.get("flattenForms", False):
-            output.bake(annots=False, widgets=True)
+        if save_options.get("annotationMode") == "flatten" or save_options.get("flattenForms", False):
+            output.bake(
+                annots=save_options.get("annotationMode") == "flatten",
+                widgets=save_options.get("flattenForms", False),
+            )
         buffer = io.BytesIO()
         output.save(buffer, garbage=4, deflate=True, clean=True)
         edited = buffer.getvalue()
