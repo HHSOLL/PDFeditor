@@ -24,6 +24,11 @@ without broken layout or hidden stale data.
 
 - Normal text PDFs with horizontal text runs.
 - Redaction plus replacement text for existing text edits.
+- Continuous document viewing with fixed header, rail, thumbnail sidebar,
+  inspector, and bottom navigation. Only the central document viewport scrolls.
+- First-pass semantic reflow for paragraph/block edits: downstream text in the
+  same flow is moved, protected figure/image/caption regions are avoided, and
+  overflow can cascade to following pages.
 - Flattened and native annotation export where safe.
 - Page reorder, duplicate, rotate, extract, and mixed page sizes.
 - Password-aware open/extract/apply flow.
@@ -33,6 +38,10 @@ without broken layout or hidden stale data.
 ## Explicitly Limited Until Implemented
 
 - Full inline content-stream text editing.
+- Arbitrary multi-column layout solving with movable figures/tables. The first
+  reflow solver treats existing images, figures, tables, and captions as
+  protected blocks and moves text around them; it blocks export when the edited
+  text itself cannot be placed safely.
 - OCR-backed scanned PDF editing.
 - Certificate digital signatures.
 - XFA forms and advanced AcroForm scripts/calculations.
@@ -44,3 +53,19 @@ without broken layout or hidden stale data.
 `npm run verify:local` must pass before any release build. Manual
 compatibility smoke must be recorded for Acrobat Reader, Chrome, and Preview
 for any change touching engine output.
+
+## Viewport Policy
+
+`html`, `body`, and `#app` are fixed-height and `overflow: hidden`. The app
+shell fills `100dvh`. Header/menu/ribbon and the bottom navigation are fixed
+rows. The workspace has rail, thumbnails, document, and inspector columns. Only
+`.canvas-area` scrolls the document stack; `.page-list` and `.inspector-body`
+may scroll internally. `window.scrollY` must remain `0` during normal document
+navigation.
+
+## Performance Targets
+
+- 100-page PDF: first page visible within 2 seconds on the local test machine.
+- 500-page PDF: opens without rendering every page canvas at once.
+- Thumbnails hydrate lazily or through a queue; central scroll must not move the
+  rail, sidebar, or inspector.

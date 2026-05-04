@@ -68,8 +68,7 @@ let currentPageId: string | null = null;
 let selectedId: string | null = null;
 let currentTool: Tool = "select";
 let zoom = 1;
-let pageWidth = 0;
-let pageHeight = 0;
+let activePageMetrics: PageMetrics | null = null;
 let dragState: DragState | null = null;
 let draftState: DraftState | null = null;
 let pendingImageDataUrl: string | null = null;
@@ -78,8 +77,10 @@ let redoStack: Snapshot[] = [];
 let toastTimer = 0;
 let renderCycle = 0;
 let pageScrollLockUntil = 0;
+let currentPageScrollFrame = 0;
 let pageVisibilityObserver: IntersectionObserver | null = null;
-let pageMetricsById = new Map<string, { width: number; height: number }>();
+let pageMetricsById = new Map<string, PageMetrics>();
+let semanticReflowPlanCache: { key: string; plan: ReflowPlan } | null = null;
 
 const tools: Array<{ id: Tool; label: string; icon: string }> = [
   { id: "select", label: "선택", icon: "↖" },
@@ -95,6 +96,126 @@ const dom = {
   imageInput: document.createElement("input"),
 };
 
+const featureCommands = new Map<string, FeatureCommand>();
+
+registerCommand({
+  id: "open-file",
+  label: "파일 열기",
+  implemented: true,
+  enabled: () => true,
+  run: () => dom.fileInput.click(),
+});
+registerCommand({
+  id: "export-pdf",
+  label: "저장",
+  implemented: true,
+  enabled: () => Boolean(originalBytes && pdfDocument),
+  disabledReason: () => "먼저 PDF를 열어주세요.",
+  run: () => void exportPdf(),
+});
+registerCommand({
+  id: "undo",
+  label: "실행 취소",
+  implemented: true,
+  enabled: () => undoStack.length > 1,
+  disabledReason: () => "실행 취소할 작업이 없습니다.",
+  run: undo,
+});
+registerCommand({
+  id: "redo",
+  label: "다시 실행",
+  implemented: true,
+  enabled: () => redoStack.length > 0,
+  disabledReason: () => "다시 실행할 작업이 없습니다.",
+  run: redo,
+});
+registerCommand({
+  id: "zoom-out",
+  label: "축소",
+  implemented: true,
+  enabled: () => zoom > 0.45,
+  disabledReason: () => "최소 확대율입니다.",
+  run: () => setZoom(zoom - 0.15),
+});
+registerCommand({
+  id: "zoom-in",
+  label: "확대",
+  implemented: true,
+  enabled: () => zoom < 2.4,
+  disabledReason: () => "최대 확대율입니다.",
+  run: () => setZoom(zoom + 0.15),
+});
+registerCommand({
+  id: "previous-page",
+  label: "이전 페이지",
+  implemented: true,
+  enabled: () => pageItems.findIndex((item) => item.id === currentPageId) > 0,
+  disabledReason: () => "첫 페이지입니다.",
+  run: () => goToRelativePage(-1),
+});
+registerCommand({
+  id: "next-page",
+  label: "다음 페이지",
+  implemented: true,
+  enabled: () => {
+    const index = pageItems.findIndex((item) => item.id === currentPageId);
+    return index >= 0 && index < pageItems.length - 1;
+  },
+  disabledReason: () => "마지막 페이지입니다.",
+  run: () => goToRelativePage(1),
+});
+registerCommand({
+  id: "move-page-up",
+  label: "앞으로",
+  implemented: true,
+  enabled: () => pageItems.findIndex((item) => item.id === currentPageId) > 0,
+  disabledReason: () => "첫 페이지는 앞으로 이동할 수 없습니다.",
+  run: () => moveCurrentPage(-1),
+});
+registerCommand({
+  id: "move-page-down",
+  label: "뒤로",
+  implemented: true,
+  enabled: () => {
+    const index = pageItems.findIndex((item) => item.id === currentPageId);
+    return index >= 0 && index < pageItems.length - 1;
+  },
+  disabledReason: () => "마지막 페이지는 뒤로 이동할 수 없습니다.",
+  run: () => moveCurrentPage(1),
+});
+registerCommand({
+  id: "rotate-page",
+  label: "회전",
+  implemented: true,
+  enabled: () => Boolean(currentPageId),
+  disabledReason: () => "회전할 페이지가 없습니다.",
+  run: rotateCurrentPage,
+});
+registerCommand({
+  id: "duplicate-page",
+  label: "복제",
+  implemented: true,
+  enabled: () => Boolean(currentPageId),
+  disabledReason: () => "복제할 페이지가 없습니다.",
+  run: duplicateCurrentPage,
+});
+registerCommand({
+  id: "extract-page",
+  label: "추출",
+  implemented: true,
+  enabled: () => Boolean(currentPageId && originalBytes && pdfDocument),
+  disabledReason: () => "추출할 PDF를 먼저 열어주세요.",
+  run: () => void extractCurrentPage(),
+});
+registerCommand({
+  id: "delete-page",
+  label: "삭제",
+  implemented: true,
+  enabled: () => pageItems.length > 1 && Boolean(currentPageId),
+  disabledReason: () => "마지막 페이지는 삭제할 수 없습니다.",
+  run: deleteCurrentPage,
+});
+
 type PdfPageViewport = {
   width: number;
   height: number;
@@ -103,6 +224,42 @@ type PdfPageViewport = {
 };
 
 type NormalizedRect = Pick<SourceAnnotationRef, "x" | "y" | "width" | "height">;
+type PageMetrics = {
+  pageId: string;
+  width: number;
+  height: number;
+};
+type FeatureCommand = {
+  id: string;
+  label: string;
+  implemented: boolean;
+  enabled: () => boolean;
+  disabledReason?: () => string;
+  run?: () => Promise<void> | void;
+};
+type LayoutBlock = {
+  id: string;
+  pageId: string;
+  type: "text" | "image" | "caption" | "figure";
+  bbox: NormalizedRect;
+  flowId: string;
+  movable: boolean;
+  protected: boolean;
+  sourceObjectId?: string;
+  groupId?: string;
+};
+type ReflowTarget = {
+  sourceTextId: string;
+  sourcePageId: string;
+  pageId: string;
+  y: number;
+  reason: "height-delta" | "protected-block" | "page-overflow";
+};
+type ReflowPlan = {
+  blocks: LayoutBlock[];
+  movedBlocks: ReflowTarget[];
+  unresolvedCollisions: string[];
+};
 type EngineExtractImage = {
   id: string;
   x: number;
@@ -117,6 +274,55 @@ type EngineExtractPage = {
 type EngineExtractResponse = {
   pages: EngineExtractPage[];
 };
+
+function registerCommand(command: FeatureCommand): void {
+  featureCommands.set(command.id, command);
+}
+
+function bindCommandButton(id: string, commandId: string): void {
+  const element = document.getElementById(id);
+  if (!(element instanceof HTMLButtonElement)) {
+    return;
+  }
+  element.dataset.command = commandId;
+  syncCommandButton(element, commandId);
+  element.addEventListener("click", () => void executeCommand(commandId));
+}
+
+function syncCommandButton(button: HTMLButtonElement, commandId: string): void {
+  const command = featureCommands.get(commandId);
+  if (!command || !command.implemented) {
+    button.hidden = true;
+    return;
+  }
+  button.hidden = false;
+  const enabled = command.enabled();
+  button.disabled = !enabled;
+  button.title = enabled ? button.title || command.label : command.disabledReason?.() ?? "현재 사용할 수 없습니다.";
+}
+
+function syncCommandButtons(): void {
+  document.querySelectorAll<HTMLButtonElement>("[data-command]").forEach((button) => {
+    const commandId = button.dataset.command;
+    if (commandId) {
+      syncCommandButton(button, commandId);
+    }
+  });
+}
+
+async function executeCommand(commandId: string): Promise<void> {
+  const command = featureCommands.get(commandId);
+  if (!command || !command.implemented || !command.run) {
+    return;
+  }
+  if (!command.enabled()) {
+    showToast(command.disabledReason?.() ?? "현재 사용할 수 없습니다.");
+    syncCommandButtons();
+    return;
+  }
+  await command.run();
+  syncCommandButtons();
+}
 
 function renderApp(): void {
   appRoot.innerHTML = `
@@ -221,16 +427,16 @@ function renderApp(): void {
 }
 
 function bindStaticEvents(): void {
-  byId("openButton").addEventListener("click", () => dom.fileInput.click());
-  byId("exportButton").addEventListener("click", () => void exportPdf());
-  byId("undoButton").addEventListener("click", undo);
-  byId("redoButton").addEventListener("click", redo);
-  byId("zoomOutButton").addEventListener("click", () => setZoom(zoom - 0.15));
-  byId("zoomInButton").addEventListener("click", () => setZoom(zoom + 0.15));
-  byId("zoomOutFooter").addEventListener("click", () => setZoom(zoom - 0.15));
-  byId("zoomInFooter").addEventListener("click", () => setZoom(zoom + 0.15));
-  byId("previousPageButton").addEventListener("click", () => goToRelativePage(-1));
-  byId("nextPageButton").addEventListener("click", () => goToRelativePage(1));
+  bindCommandButton("openButton", "open-file");
+  bindCommandButton("exportButton", "export-pdf");
+  bindCommandButton("undoButton", "undo");
+  bindCommandButton("redoButton", "redo");
+  bindCommandButton("zoomOutButton", "zoom-out");
+  bindCommandButton("zoomInButton", "zoom-in");
+  bindCommandButton("zoomOutFooter", "zoom-out");
+  bindCommandButton("zoomInFooter", "zoom-in");
+  bindCommandButton("previousPageButton", "previous-page");
+  bindCommandButton("nextPageButton", "next-page");
 
   dom.fileInput.addEventListener("change", () => {
     const file = dom.fileInput.files?.[0];
@@ -290,8 +496,14 @@ function renderToolbar(): void {
     const button = document.createElement("button");
     button.type = "button";
     button.className = `tool-btn${currentTool === tool.id ? " active" : ""}`;
+    button.disabled = !pdfDocument;
+    button.title = pdfDocument ? tool.label : "먼저 PDF를 열어주세요.";
     button.innerHTML = `<span class="tool-icon">${tool.icon}</span><span>${tool.label}</span>`;
     button.addEventListener("click", () => {
+      if (!pdfDocument) {
+        showToast("먼저 PDF를 열어주세요.");
+        return;
+      }
       currentTool = tool.id;
       pendingImageDataUrl = null;
       renderToolbar();
@@ -304,14 +516,24 @@ function renderToolbar(): void {
   const imageButton = document.createElement("button");
   imageButton.type = "button";
   imageButton.className = "tool-btn";
+  imageButton.disabled = !pdfDocument;
+  imageButton.title = pdfDocument ? "이미지 삽입" : "먼저 PDF를 열어주세요.";
   imageButton.innerHTML = `<span class="tool-icon">▧</span><span>이미지</span>`;
-  imageButton.addEventListener("click", () => dom.imageInput.click());
+  imageButton.addEventListener("click", () => {
+    if (!pdfDocument) {
+      showToast("먼저 PDF를 열어주세요.");
+      return;
+    }
+    dom.imageInput.click();
+  });
   toolbar.append(imageButton);
 
   const searchInput = document.createElement("input");
   searchInput.type = "search";
   searchInput.placeholder = "검색";
   searchInput.ariaLabel = "PDF 텍스트 검색";
+  searchInput.disabled = !pdfDocument;
+  searchInput.title = pdfDocument ? "PDF 텍스트 검색" : "먼저 PDF를 열어주세요.";
   searchInput.style.minWidth = "120px";
   searchInput.style.height = "36px";
   searchInput.style.border = "1px solid #cfd8e1";
@@ -358,6 +580,7 @@ async function loadPdf(file: File): Promise<void> {
   undoStack = [makeSnapshot()];
   redoStack = [];
   renderDocumentName();
+  renderToolbar();
   await renderWorkspace();
   renderInspector();
   showToast(`${file.name} 파일을 열었습니다.`);
@@ -425,6 +648,7 @@ async function renderWorkspace(): Promise<void> {
   pageVisibilityObserver?.disconnect();
   pageVisibilityObserver = null;
   pageMetricsById = new Map();
+  activePageMetrics = null;
   const pageList = byId("pageList");
   const pageCount = byId("pageCount");
   const bottomPageCount = document.querySelector<HTMLElement>("#bottomPageCount");
@@ -452,7 +676,7 @@ async function renderWorkspace(): Promise<void> {
         </div>
       </div>
     `;
-    byId("emptyOpenButton").addEventListener("click", () => dom.fileInput.click());
+    byId("emptyOpenButton").addEventListener("click", () => void executeCommand("open-file"));
     updateCurrentPageIndicators();
     return;
   }
@@ -491,8 +715,8 @@ async function renderWorkspace(): Promise<void> {
     return;
   }
   observePageStages(canvasArea);
-  canvasArea.removeEventListener("scroll", updateCurrentPageFromScroll);
-  canvasArea.addEventListener("scroll", updateCurrentPageFromScroll, { passive: true });
+  canvasArea.removeEventListener("scroll", scheduleCurrentPageFromScroll);
+  canvasArea.addEventListener("scroll", scheduleCurrentPageFromScroll, { passive: true });
   if (currentStage && pageItems[0]?.id !== current.id) {
     currentStage.scrollIntoView({ block: "start" });
   }
@@ -544,7 +768,7 @@ async function hydrateThumbnail(button: HTMLButtonElement, item: PageItem): Prom
 async function createPageStage(item: PageItem, index: number): Promise<HTMLDivElement> {
   const page = await requirePage(item.sourceIndex);
   const viewport = page.getViewport({ scale: zoom, rotation: item.rotation });
-  setPageMetrics(item.id, viewport.width, viewport.height);
+  const metrics = setPageMetrics(item.id, viewport.width, viewport.height);
 
   const stage = document.createElement("div");
   stage.className = `page-stage${item.id === currentPageId ? " active" : ""}`;
@@ -553,14 +777,14 @@ async function createPageStage(item: PageItem, index: number): Promise<HTMLDivEl
   stage.setAttribute("aria-label", `${index + 1}쪽`);
   const shell = document.createElement("div");
   shell.className = "page-shell";
-  shell.style.width = `${viewport.width}px`;
-  shell.style.height = `${viewport.height}px`;
+  shell.style.width = `${metrics.width}px`;
+  shell.style.height = `${metrics.height}px`;
 
   const canvas = document.createElement("canvas");
   canvas.setAttribute("aria-label", `${index + 1}쪽 PDF 페이지`);
   canvas.dataset.pending = "true";
-  canvas.style.width = `${viewport.width}px`;
-  canvas.style.height = `${viewport.height}px`;
+  canvas.style.width = `${metrics.width}px`;
+  canvas.style.height = `${metrics.height}px`;
   const layer = document.createElement("div");
   layer.className = "annotation-layer";
   layer.dataset.pageId = item.id;
@@ -581,7 +805,7 @@ async function renderPageStage(stage: HTMLDivElement, item: PageItem): Promise<v
   stage.dataset.rendering = "true";
   const page = await requirePage(item.sourceIndex);
   const viewport = page.getViewport({ scale: zoom, rotation: item.rotation });
-  setPageMetrics(item.id, viewport.width, viewport.height);
+  const metrics = setPageMetrics(item.id, viewport.width, viewport.height);
   setActivePageMetrics(item.id);
 
   const canvas = stage.querySelector<HTMLCanvasElement>("canvas");
@@ -591,10 +815,10 @@ async function renderPageStage(stage: HTMLDivElement, item: PageItem): Promise<v
     return;
   }
   const ratio = window.devicePixelRatio || 1;
-  canvas.width = Math.floor(pageWidth * ratio);
-  canvas.height = Math.floor(pageHeight * ratio);
-  canvas.style.width = `${pageWidth}px`;
-  canvas.style.height = `${pageHeight}px`;
+  canvas.width = Math.floor(metrics.width * ratio);
+  canvas.height = Math.floor(metrics.height * ratio);
+  canvas.style.width = `${metrics.width}px`;
+  canvas.style.height = `${metrics.height}px`;
   const context = canvas.getContext("2d");
   if (context) {
     context.setTransform(ratio, 0, 0, ratio, 0, 0);
@@ -602,17 +826,18 @@ async function renderPageStage(stage: HTMLDivElement, item: PageItem): Promise<v
     pageCanvasSnapshots.set(item.id, canvas.toDataURL("image/png"));
   }
   delete canvas.dataset.pending;
-  renderLayerContents(layer, item);
+  renderLayerContents(layer, item, metrics);
   stage.dataset.rendered = "true";
   delete stage.dataset.rendering;
 }
 
-function setPageMetrics(pageId: string, width: number, height: number): void {
-  pageMetricsById.set(pageId, { width, height });
+function setPageMetrics(pageId: string, width: number, height: number): PageMetrics {
+  const metrics = { pageId, width, height };
+  pageMetricsById.set(pageId, metrics);
   if (pageId === currentPageId) {
-    pageWidth = width;
-    pageHeight = height;
+    activePageMetrics = metrics;
   }
+  return metrics;
 }
 
 function setActivePageMetrics(pageId: string): boolean {
@@ -620,9 +845,21 @@ function setActivePageMetrics(pageId: string): boolean {
   if (!metrics) {
     return false;
   }
-  pageWidth = metrics.width;
-  pageHeight = metrics.height;
+  activePageMetrics = metrics;
   return true;
+}
+
+function metricsForPage(pageId: string): PageMetrics | null {
+  return pageMetricsById.get(pageId) ?? null;
+}
+
+function metricsForLayer(layer: HTMLElement): PageMetrics | null {
+  const pageId = layer.dataset.pageId;
+  return pageId ? metricsForPage(pageId) : null;
+}
+
+function fallbackMetrics(pageId: string): PageMetrics {
+  return metricsForPage(pageId) ?? activePageMetrics ?? { pageId, width: 612 * zoom, height: 792 * zoom };
 }
 
 function pageStage(pageId: string): HTMLDivElement | null {
@@ -652,6 +889,16 @@ function observePageStages(canvasArea: HTMLElement): void {
   );
   document.querySelectorAll<HTMLDivElement>(".page-stage").forEach((stage) => {
     pageVisibilityObserver?.observe(stage);
+  });
+}
+
+function scheduleCurrentPageFromScroll(): void {
+  if (currentPageScrollFrame) {
+    return;
+  }
+  currentPageScrollFrame = window.requestAnimationFrame(() => {
+    currentPageScrollFrame = 0;
+    updateCurrentPageFromScroll();
   });
 }
 
@@ -697,6 +944,23 @@ function updateCurrentPageIndicators(): void {
   document.querySelectorAll<HTMLButtonElement>(".thumb").forEach((thumb) => {
     thumb.classList.toggle("active", thumb.dataset.pageId === currentPageId);
   });
+  scrollActiveThumbnailIntoView();
+  syncCommandButtons();
+}
+
+function scrollActiveThumbnailIntoView(): void {
+  const pageList = document.querySelector<HTMLElement>("#pageList");
+  const activeThumb = pageList?.querySelector<HTMLElement>(".thumb.active");
+  if (!pageList || !activeThumb) {
+    return;
+  }
+  const listRect = pageList.getBoundingClientRect();
+  const thumbRect = activeThumb.getBoundingClientRect();
+  if (thumbRect.top < listRect.top) {
+    pageList.scrollTop -= listRect.top - thumbRect.top;
+  } else if (thumbRect.bottom > listRect.bottom) {
+    pageList.scrollTop += thumbRect.bottom - listRect.bottom;
+  }
 }
 
 function scrollPageIntoView(pageId: string): void {
@@ -727,17 +991,17 @@ function goToRelativePage(delta: -1 | 1): void {
   renderInspector();
 }
 
-function renderAnnotation(annotation: Annotation): Element {
+function renderAnnotation(annotation: Annotation, metrics: PageMetrics): Element {
   if (annotation.type === "pen") {
-    return renderPen(annotation);
+    return renderPen(annotation, metrics);
   }
 
   const node = document.createElement("div");
   node.className = `annotation ${annotation.type}${selectedId === annotation.id ? " selected" : ""}`;
-  node.style.left = `${annotation.x * pageWidth}px`;
-  node.style.top = `${annotation.y * pageHeight}px`;
-  node.style.width = `${annotation.width * pageWidth}px`;
-  node.style.height = `${annotation.height * pageHeight}px`;
+  node.style.left = `${annotation.x * metrics.width}px`;
+  node.style.top = `${annotation.y * metrics.height}px`;
+  node.style.width = `${annotation.width * metrics.width}px`;
+  node.style.height = `${annotation.height * metrics.height}px`;
   node.dataset.id = annotation.id;
   node.addEventListener("pointerdown", (event) => handleAnnotationPointerDown(event, annotation));
 
@@ -771,7 +1035,7 @@ function renderAnnotation(annotation: Annotation): Element {
         annotation.text = textarea.value;
         markAnnotationDirty(annotation);
         autoFitText(annotation);
-        node.style.height = `${annotation.height * pageHeight}px`;
+        node.style.height = `${annotation.height * metrics.height}px`;
         textarea.style.height = "100%";
         refreshFlowEffects();
         syncInspectorValues(annotation);
@@ -839,14 +1103,14 @@ function renderFormField(annotation: FormFieldAnnotation, node: HTMLDivElement):
   node.append(input);
 }
 
-function renderPen(annotation: PenAnnotation): SVGSVGElement {
+function renderPen(annotation: PenAnnotation, metrics: PageMetrics): SVGSVGElement {
   const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
   svg.classList.add("pen-stroke");
   if (selectedId === annotation.id) {
     svg.classList.add("selected");
   }
-  svg.setAttribute("width", `${pageWidth}`);
-  svg.setAttribute("height", `${pageHeight}`);
+  svg.setAttribute("width", `${metrics.width}`);
+  svg.setAttribute("height", `${metrics.height}`);
   svg.dataset.id = annotation.id;
   svg.addEventListener("pointerdown", (event) => handleAnnotationPointerDown(event, annotation));
 
@@ -854,7 +1118,7 @@ function renderPen(annotation: PenAnnotation): SVGSVGElement {
   polyline.setAttribute(
     "points",
     annotation.points
-      .map((point) => `${point.x * pageWidth},${point.y * pageHeight}`)
+      .map((point) => `${point.x * metrics.width},${point.y * metrics.height}`)
       .join(" "),
   );
   polyline.setAttribute("fill", "none");
@@ -873,10 +1137,11 @@ function handleLayerPointerDown(event: PointerEvent, pageId: string): void {
   currentPageId = pageId;
   setActivePageMetrics(pageId);
   updateCurrentPageIndicators();
-  const point = eventPoint(event, event.currentTarget);
+  const metrics = metricsForLayer(event.currentTarget) ?? fallbackMetrics(pageId);
+  const point = eventPoint(event, event.currentTarget, metrics);
 
   if (pendingImageDataUrl) {
-    addImage(pageId, point.x, point.y, pendingImageDataUrl);
+    addImage(pageId, point.x, point.y, pendingImageDataUrl, metrics);
     pendingImageDataUrl = null;
     return;
   }
@@ -889,7 +1154,7 @@ function handleLayerPointerDown(event: PointerEvent, pageId: string): void {
   }
 
   if (currentTool === "text") {
-    addText(pageId, point.x, point.y);
+    addText(pageId, point.x, point.y, metrics);
     return;
   }
 
@@ -897,9 +1162,10 @@ function handleLayerPointerDown(event: PointerEvent, pageId: string): void {
     draftState = {
       type: "pen",
       tool: "pen",
+      pageId,
       startX: point.x,
       startY: point.y,
-      points: [toRelativePoint(point.x, point.y)],
+      points: [toRelativePoint(point.x, point.y, metrics)],
     };
     return;
   }
@@ -907,22 +1173,23 @@ function handleLayerPointerDown(event: PointerEvent, pageId: string): void {
   draftState = {
     type: "box",
     tool: currentTool,
+    pageId,
     startX: point.x,
     startY: point.y,
     points: [],
   };
 }
 
-function renderSourceTextItem(item: SourceTextItem): HTMLButtonElement {
+function renderSourceTextItem(item: SourceTextItem, metrics: PageMetrics): HTMLButtonElement {
   const button = document.createElement("button");
   button.type = "button";
   button.className = `source-text${item.lineCount > 1 ? " block" : ""}`;
   button.textContent = item.text;
   button.ariaLabel = `기존 PDF 글씨 편집: ${item.text}`;
-  button.style.left = `${item.x * pageWidth}px`;
-  button.style.top = `${item.y * pageHeight}px`;
-  button.style.width = `${item.width * pageWidth}px`;
-  button.style.height = `${item.height * pageHeight}px`;
+  button.style.left = `${item.x * metrics.width}px`;
+  button.style.top = `${item.y * metrics.height}px`;
+  button.style.width = `${item.width * metrics.width}px`;
+  button.style.height = `${item.height * metrics.height}px`;
   button.style.fontSize = `${item.fontSize * zoom}px`;
   button.style.fontFamily = item.fontFamily;
   button.title = "기존 PDF 글씨 편집";
@@ -939,15 +1206,15 @@ function renderSourceTextItem(item: SourceTextItem): HTMLButtonElement {
   return button;
 }
 
-function renderSourceImageItem(item: SourceImageItem): HTMLButtonElement {
+function renderSourceImageItem(item: SourceImageItem, metrics: PageMetrics): HTMLButtonElement {
   const button = document.createElement("button");
   button.type = "button";
   button.className = "source-image";
   button.ariaLabel = "기존 PDF 이미지 삭제 대상으로 선택";
-  button.style.left = `${item.x * pageWidth}px`;
-  button.style.top = `${item.y * pageHeight}px`;
-  button.style.width = `${item.width * pageWidth}px`;
-  button.style.height = `${item.height * pageHeight}px`;
+  button.style.left = `${item.x * metrics.width}px`;
+  button.style.top = `${item.y * metrics.height}px`;
+  button.style.width = `${item.width * metrics.width}px`;
+  button.style.height = `${item.height * metrics.height}px`;
   button.title = "기존 PDF 이미지 삭제";
   button.addEventListener("pointerdown", (event) => {
     if (currentTool !== "select") {
@@ -966,10 +1233,11 @@ function renderCurrentLayer(): void {
   document.querySelectorAll<HTMLElement>(".annotation-layer").forEach((layer) => {
     const pageId = layer.dataset.pageId;
     const item = pageItems.find((candidate) => candidate.id === pageId);
-    if (!pageId || !item || !setActivePageMetrics(pageId)) {
+    const metrics = pageId ? metricsForPage(pageId) : null;
+    if (!pageId || !item || !metrics) {
       return;
     }
-    renderLayerContents(layer, item);
+    renderLayerContents(layer, item, metrics);
   });
   if (currentPageId) {
     setActivePageMetrics(currentPageId);
@@ -980,21 +1248,24 @@ function refreshFlowEffects(): void {
   document.querySelectorAll<HTMLElement>(".annotation-layer").forEach((layer) => {
     const pageId = layer.dataset.pageId;
     const item = pageItems.find((candidate) => candidate.id === pageId);
-    if (!pageId || !item || !setActivePageMetrics(pageId)) {
+    const metrics = pageId ? metricsForPage(pageId) : null;
+    if (!pageId || !item || !metrics) {
       return;
     }
     layer.querySelectorAll(".source-mask, .source-text, .source-image, .flow-slice").forEach((node) => node.remove());
     const flowSlices = pageFlowSlicesForPage(item.id);
     const flowNodes = [
-      ...sourceMasksForPage(item.id).map(renderSourceMask),
-      ...flowSlices.map(renderPageFlowSlice),
-      ...(flowSlices.length > 0 ? [] : flowedSourceTextsForPage(item.id).map(renderFlowedSourceText)),
+      ...sourceMasksForPage(item.id).map((mask) => renderSourceMask(mask, metrics)),
+      ...flowSlices.map((slice) => renderPageFlowSlice(slice, metrics)),
+      ...(flowSlices.length > 0
+        ? []
+        : flowedSourceTextsForPage(item.id).map((flowedText) => renderFlowedSourceText(flowedText, metrics))),
       ...(sourceImageItemsByPage.get(item.id) ?? [])
         .filter((sourceImage) => !isSourceImageAlreadyEdited(sourceImage.id))
-        .map(renderSourceImageItem),
+        .map((sourceImage) => renderSourceImageItem(sourceImage, metrics)),
       ...(sourceTextItemsByPage.get(item.id) ?? [])
-        .filter((sourceText) => !isSourceTextAlreadyEdited(sourceText.id) && sourceTextFlowOffset(sourceText) === 0)
-        .map(renderSourceTextItem),
+        .filter((sourceText) => !isSourceTextAlreadyEdited(sourceText.id) && !semanticReflowTarget(sourceText))
+        .map((sourceText) => renderSourceTextItem(sourceText, metrics)),
     ];
     layer.prepend(...flowNodes);
   });
@@ -1027,76 +1298,76 @@ function syncInspectorValues(annotation: Annotation): void {
   }
 }
 
-function renderLayerContents(layer: HTMLElement, item: PageItem): void {
+function renderLayerContents(layer: HTMLElement, item: PageItem, metrics: PageMetrics): void {
   layer.innerHTML = "";
   const flowSlices = pageFlowSlicesForPage(item.id);
   for (const mask of sourceMasksForPage(item.id)) {
-    layer.append(renderSourceMask(mask));
+    layer.append(renderSourceMask(mask, metrics));
   }
 
   for (const slice of flowSlices) {
-    layer.append(renderPageFlowSlice(slice));
+    layer.append(renderPageFlowSlice(slice, metrics));
   }
 
   if (flowSlices.length === 0) {
     for (const flowedText of flowedSourceTextsForPage(item.id)) {
-      layer.append(renderFlowedSourceText(flowedText));
+      layer.append(renderFlowedSourceText(flowedText, metrics));
     }
   }
 
   for (const sourceText of sourceTextItemsByPage.get(item.id) ?? []) {
-    if (!isSourceTextAlreadyEdited(sourceText.id) && sourceTextFlowOffset(sourceText) === 0) {
-      layer.append(renderSourceTextItem(sourceText));
+    if (!isSourceTextAlreadyEdited(sourceText.id) && !semanticReflowTarget(sourceText)) {
+      layer.append(renderSourceTextItem(sourceText, metrics));
     }
   }
 
   for (const sourceImage of sourceImageItemsByPage.get(item.id) ?? []) {
     if (!isSourceImageAlreadyEdited(sourceImage.id)) {
-      layer.append(renderSourceImageItem(sourceImage));
+      layer.append(renderSourceImageItem(sourceImage, metrics));
     }
   }
 
   for (const annotation of annotations.filter((ann) => ann.pageId === item.id)) {
-    layer.append(renderAnnotation(annotation));
+    layer.append(renderAnnotation(annotation, metrics));
   }
 }
 
-function renderSourceMask(mask: SourceMask): HTMLDivElement {
+function renderSourceMask(mask: SourceMask, metrics: PageMetrics): HTMLDivElement {
   const element = document.createElement("div");
   element.className = "source-mask";
   element.dataset.id = mask.id;
-  element.style.left = `${mask.x * pageWidth}px`;
-  element.style.top = `${mask.y * pageHeight}px`;
-  element.style.width = `${mask.width * pageWidth}px`;
-  element.style.height = `${mask.height * pageHeight}px`;
+  element.style.left = `${mask.x * metrics.width}px`;
+  element.style.top = `${mask.y * metrics.height}px`;
+  element.style.width = `${mask.width * metrics.width}px`;
+  element.style.height = `${mask.height * metrics.height}px`;
   return element;
 }
 
-function renderPageFlowSlice(slice: PageFlowSlice): HTMLDivElement {
+function renderPageFlowSlice(slice: PageFlowSlice, metrics: PageMetrics): HTMLDivElement {
   const element = document.createElement("div");
   element.className = "flow-slice";
   element.dataset.id = slice.id;
-  element.style.left = `${slice.x * pageWidth}px`;
-  element.style.top = `${slice.y * pageHeight}px`;
-  element.style.width = `${slice.width * pageWidth}px`;
-  element.style.height = `${slice.height * pageHeight}px`;
+  element.style.left = `${slice.x * metrics.width}px`;
+  element.style.top = `${slice.y * metrics.height}px`;
+  element.style.width = `${slice.width * metrics.width}px`;
+  element.style.height = `${slice.height * metrics.height}px`;
   element.style.backgroundImage = `url("${pageCanvasSnapshots.get(slice.pageId) ?? ""}")`;
-  element.style.backgroundSize = `${pageWidth}px ${pageHeight}px`;
-  element.style.backgroundPosition = `-${slice.x * pageWidth}px -${slice.sourceY * pageHeight}px`;
+  element.style.backgroundSize = `${metrics.width}px ${metrics.height}px`;
+  element.style.backgroundPosition = `-${slice.x * metrics.width}px -${slice.sourceY * metrics.height}px`;
   return element;
 }
 
-function renderFlowedSourceText(flowedText: FlowedSourceText): HTMLButtonElement {
+function renderFlowedSourceText(flowedText: FlowedSourceText, metrics: PageMetrics): HTMLButtonElement {
   const item = flowedText.item;
   const button = document.createElement("button");
   button.type = "button";
   button.className = `source-text flowed-source-text${item.lineCount > 1 ? " block" : ""}`;
   button.textContent = item.text;
   button.ariaLabel = `재배치된 PDF 글씨 편집: ${item.text}`;
-  button.style.left = `${item.x * pageWidth}px`;
-  button.style.top = `${flowedText.y * pageHeight}px`;
-  button.style.width = `${item.width * pageWidth}px`;
-  button.style.height = `${item.height * pageHeight}px`;
+  button.style.left = `${item.x * metrics.width}px`;
+  button.style.top = `${flowedText.y * metrics.height}px`;
+  button.style.width = `${item.width * metrics.width}px`;
+  button.style.height = `${item.height * metrics.height}px`;
   button.style.fontSize = `${item.fontSize * zoom}px`;
   button.style.fontFamily = item.fontFamily;
   button.title = "재배치된 기존 PDF 글씨 편집";
@@ -1105,8 +1376,8 @@ function renderFlowedSourceText(flowedText: FlowedSourceText): HTMLButtonElement
       return;
     }
     event.stopPropagation();
-    currentPageId = item.pageId;
-    setActivePageMetrics(item.pageId);
+    currentPageId = flowedText.pageId;
+    setActivePageMetrics(flowedText.pageId);
     updateCurrentPageIndicators();
     convertSourceTextToAnnotation(item);
   });
@@ -1128,7 +1399,8 @@ function sourceMasksForPage(pageId: string): SourceMask[] {
     if (isSourceTextAlreadyEdited(sourceText.id)) {
       continue;
     }
-    if (sourceTextFlowOffset(sourceText) !== 0) {
+    const target = semanticReflowTarget(sourceText);
+    if (target) {
       masks.push({
         id: `${sourceText.id}:flow-mask`,
         x: sourceText.x,
@@ -1153,13 +1425,18 @@ function sourceMasksForPage(pageId: string): SourceMask[] {
 }
 
 function pageFlowSlicesForPage(pageId: string): PageFlowSlice[] {
-  if (!pageCanvasSnapshots.has(pageId)) {
-    return [];
-  }
   return layoutFlowSlicesForPage(pageId);
 }
 
 function layoutFlowSlicesForPage(pageId: string): PageFlowSlice[] {
+  void pageId;
+  return [];
+  /*
+   * Semantic reflow keeps moved PDF text searchable. The old flow-slice path is
+   * intentionally disabled for text reflow because it rasterized downstream page
+   * content and hid text structure behind an image fallback.
+   */
+  /*
   return sourceEditAnnotations(pageId).flatMap((annotation) => {
     const original = annotation.eraseOriginal;
     if (!original || !isReflowSourceAnnotation(annotation)) {
@@ -1190,25 +1467,268 @@ function layoutFlowSlicesForPage(pageId: string): PageFlowSlice[] {
       },
     ];
   });
+  */
 }
 
 function flowedSourceTextsForPage(pageId: string): FlowedSourceText[] {
-  return (sourceTextItemsByPage.get(pageId) ?? []).flatMap((item) => {
-    if (isSourceTextAlreadyEdited(item.id)) {
-      return [];
+  const flowed: FlowedSourceText[] = [];
+  for (const items of sourceTextItemsByPage.values()) {
+    for (const item of items) {
+      if (isSourceTextAlreadyEdited(item.id)) {
+        continue;
+      }
+      const target = semanticReflowTarget(item);
+      if (!target || target.pageId !== pageId) {
+        continue;
+      }
+      flowed.push({
+        id: `${item.id}:flowed`,
+        item,
+        pageId,
+        y: target.y,
+      });
+    }
+  }
+  return flowed.sort((left, right) => left.y - right.y || left.item.x - right.item.x);
+}
+
+function semanticReflowPlan(): ReflowPlan {
+  const cacheKey = semanticReflowCacheKey();
+  if (semanticReflowPlanCache?.key === cacheKey) {
+    return semanticReflowPlanCache.plan;
+  }
+  const blocks = layoutBlocksInDocument();
+  const movedBlocks: ReflowTarget[] = [];
+  const unresolvedCollisions: string[] = [];
+  const sourceTextById = new Map<string, SourceTextItem>();
+  for (const items of sourceTextItemsByPage.values()) {
+    for (const item of items) {
+      sourceTextById.set(item.id, item);
+    }
+  }
+
+  for (const item of sourceTextById.values()) {
+    if (isSourceTextAlreadyEdited(item.id) || !item.reflowable) {
+      continue;
     }
     const offset = sourceTextFlowOffset(item);
     if (offset === 0) {
-      return [];
+      continue;
     }
-    return [
-      {
-        id: `${item.id}:flowed`,
-        item,
-        y: clamp(item.y + offset, 0, 1 - item.height),
-      },
-    ];
+    const target = solveReflowTarget(item, offset, blocks);
+    if (target.unresolved) {
+      unresolvedCollisions.push(target.unresolved);
+      continue;
+    }
+    if (target.pageId !== item.pageId || Math.abs(target.y - item.y) > 0.002) {
+      movedBlocks.push({
+        sourceTextId: item.id,
+        sourcePageId: item.pageId,
+        pageId: target.pageId,
+        y: target.y,
+        reason: target.reason,
+      });
+    }
+  }
+
+  const plan = { blocks, movedBlocks, unresolvedCollisions };
+  semanticReflowPlanCache = { key: cacheKey, plan };
+  return plan;
+}
+
+function semanticReflowTarget(item: SourceTextItem): ReflowTarget | null {
+  return semanticReflowPlan().movedBlocks.find((target) => target.sourceTextId === item.id) ?? null;
+}
+
+function semanticReflowCacheKey(): string {
+  const sourceEditKey = sourceEditAnnotationsInDocument()
+    .map((annotation) => {
+      return [
+        annotation.id,
+        annotation.pageId,
+        annotation.sourceTextId ?? "",
+        annotation.x.toFixed(4),
+        annotation.y.toFixed(4),
+        annotation.width.toFixed(4),
+        annotation.height.toFixed(4),
+        annotation.fontSize,
+        annotation.text.length,
+      ].join(":");
+    })
+    .join("|");
+  return [
+    pageItems.map((item) => item.id).join(","),
+    Array.from(sourceTextItemsByPage.values()).reduce((count, items) => count + items.length, 0),
+    Array.from(sourceImageItemsByPage.values()).reduce((count, items) => count + items.length, 0),
+    sourceEditKey,
+  ].join(";");
+}
+
+function layoutBlocksInDocument(): LayoutBlock[] {
+  const blocks: LayoutBlock[] = [];
+  for (const [pageId, images] of sourceImageItemsByPage.entries()) {
+    for (const image of images) {
+      if (isSourceImageAlreadyEdited(image.id)) {
+        continue;
+      }
+      blocks.push({
+        id: image.id,
+        pageId,
+        type: "figure",
+        bbox: image,
+        flowId: flowIdForRect(image),
+        movable: false,
+        protected: true,
+        sourceObjectId: image.sourceImageId,
+        groupId: image.id,
+      });
+      for (const caption of captionBlocksForImage(image)) {
+        blocks.push(caption);
+      }
+    }
+  }
+  for (const [pageId, texts] of sourceTextItemsByPage.entries()) {
+    for (const text of texts) {
+      blocks.push({
+        id: text.id,
+        pageId,
+        type: "text",
+        bbox: text,
+        flowId: flowIdForRect(text),
+        movable: text.reflowable,
+        protected: false,
+        sourceObjectId: text.id,
+      });
+    }
+  }
+  return blocks;
+}
+
+function captionBlocksForImage(image: SourceImageItem): LayoutBlock[] {
+  const pageTexts = sourceTextItemsByPage.get(image.pageId) ?? [];
+  const captionPattern = /^(figure|fig\.|table|표|그림)\b/i;
+  return pageTexts
+    .filter((text) => {
+      const closeBelow = text.y >= image.y + image.height - 0.01 && text.y <= image.y + image.height + 0.08;
+      const overlap = horizontalOverlapRatio(text, image) >= 0.25;
+      return closeBelow && overlap && captionPattern.test(text.text.trim());
+    })
+    .map((text) => ({
+      id: `${image.id}:caption:${text.id}`,
+      pageId: image.pageId,
+      type: "caption" as const,
+      bbox: text,
+      flowId: flowIdForRect(text),
+      movable: false,
+      protected: true,
+      sourceObjectId: text.id,
+      groupId: image.id,
+    }));
+}
+
+function solveReflowTarget(
+  item: SourceTextItem,
+  offset: number,
+  blocks: LayoutBlock[],
+): { pageId: string; y: number; reason: ReflowTarget["reason"]; unresolved?: string } {
+  const startPageIndex = pageItems.findIndex((page) => page.id === item.pageId);
+  if (startPageIndex < 0) {
+    return { pageId: item.pageId, y: item.y, reason: "height-delta", unresolved: "재흐름 대상 페이지를 찾을 수 없습니다." };
+  }
+  let targetPageIndex = startPageIndex;
+  let proposedY = item.y + offset;
+  let reason: ReflowTarget["reason"] = "height-delta";
+  const maxIterations = pageItems.length - startPageIndex + 1;
+
+  for (let iteration = 0; iteration < maxIterations; iteration += 1) {
+    const page = pageItems[targetPageIndex];
+    if (!page) {
+      const lastPage = pageItems[pageItems.length - 1];
+      if (lastPage) {
+        return {
+          pageId: lastPage.id,
+          y: clamp(pageFlowBottom(lastPage.id, item) - item.height, 0.04, 1 - item.height),
+          reason: "page-overflow",
+        };
+      }
+      return {
+        pageId: item.pageId,
+        y: item.y,
+        reason,
+        unresolved: `${item.text.slice(0, 32)} 텍스트를 배치할 다음 페이지 공간이 없습니다.`,
+      };
+    }
+    const flowTop = targetPageIndex === startPageIndex ? proposedY : nextPageFlowTop(page.id, item);
+    const solvedY = avoidProtectedBlocks(page.id, item, flowTop, blocks);
+    if (solvedY.reason === "protected-block") {
+      reason = "protected-block";
+    }
+    if (solvedY.y + item.height <= pageFlowBottom(page.id, item)) {
+      return { pageId: page.id, y: clamp(solvedY.y, 0, 1 - item.height), reason };
+    }
+    targetPageIndex += 1;
+    proposedY = nextPageFlowTop(pageItems[targetPageIndex]?.id ?? item.pageId, item);
+    reason = "page-overflow";
+  }
+  return {
+    pageId: item.pageId,
+    y: item.y,
+    reason,
+    unresolved: `${item.text.slice(0, 32)} 텍스트의 페이지 넘김을 해결할 수 없습니다.`,
+  };
+}
+
+function avoidProtectedBlocks(
+  pageId: string,
+  item: SourceTextItem,
+  initialY: number,
+  blocks: LayoutBlock[],
+): { y: number; reason: ReflowTarget["reason"] } {
+  let y = Math.max(0, initialY);
+  let reason: ReflowTarget["reason"] = "height-delta";
+  const protectedBlocks = blocks
+    .filter((block) => block.pageId === pageId && block.protected && horizontalOverlapRatio(item, block.bbox) >= 0.18)
+    .sort((left, right) => left.bbox.y - right.bbox.y);
+  for (const block of protectedBlocks) {
+    const rect = { x: item.x, y, width: item.width, height: item.height };
+    if (normalizedOverlapAreaRatio(rect, block.bbox) > 0.001 || (y < block.bbox.y && y + item.height > block.bbox.y)) {
+      y = block.bbox.y + block.bbox.height + 0.012;
+      reason = "protected-block";
+    }
+  }
+  return { y, reason };
+}
+
+function nextPageFlowTop(pageId: string, item: SourceTextItem): number {
+  const pageTexts = (sourceTextItemsByPage.get(pageId) ?? []).filter((text) => {
+    return text.reflowable && horizontalOverlapRatio(text, item) >= 0.25;
   });
+  if (pageTexts.length === 0) {
+    return clamp(item.y < 0.2 ? item.y : 0.08, 0.04, 0.86);
+  }
+  return clamp(Math.min(...pageTexts.map((text) => text.y)), 0.04, 0.86);
+}
+
+function pageFlowBottom(pageId: string, item: SourceTextItem): number {
+  const pageTexts = (sourceTextItemsByPage.get(pageId) ?? []).filter((text) => {
+    return text.reflowable && horizontalOverlapRatio(text, item) >= 0.25;
+  });
+  const footerCandidates = pageTexts.filter((text) => text.y > 0.88);
+  if (footerCandidates.length > 0) {
+    return Math.max(0.75, Math.min(...footerCandidates.map((text) => text.y)) - 0.018);
+  }
+  return 0.94;
+}
+
+function flowIdForRect(rect: { x: number; width: number }): string {
+  const center = rect.x + rect.width / 2;
+  if (center < 0.38) {
+    return "left-column";
+  }
+  if (center > 0.62) {
+    return "right-column";
+  }
+  return "main-column";
 }
 
 function sourceEditAnnotations(pageId: string): TextAnnotation[] {
@@ -1866,8 +2386,9 @@ function handleLayerPointerMove(event: PointerEvent): void {
     return;
   }
   if (draftState.type === "pen") {
-    const point = eventPoint(event, event.currentTarget);
-    draftState.points.push(toRelativePoint(point.x, point.y));
+    const metrics = metricsForLayer(event.currentTarget) ?? fallbackMetrics(draftState.pageId);
+    const point = eventPoint(event, event.currentTarget, metrics);
+    draftState.points.push(toRelativePoint(point.x, point.y, metrics));
   }
 }
 
@@ -1876,10 +2397,11 @@ function handleLayerPointerUp(event: PointerEvent): void {
     finishDrag();
     return;
   }
-  if (!draftState || !(event.currentTarget instanceof HTMLElement) || !currentPageId) {
+  if (!draftState || !(event.currentTarget instanceof HTMLElement)) {
     return;
   }
-  const point = eventPoint(event, event.currentTarget);
+  const metrics = metricsForLayer(event.currentTarget) ?? fallbackMetrics(draftState.pageId);
+  const point = eventPoint(event, event.currentTarget, metrics);
   const draft = draftState;
   draftState = null;
 
@@ -1889,7 +2411,7 @@ function handleLayerPointerUp(event: PointerEvent): void {
     }
     const annotation: PenAnnotation = {
       id: crypto.randomUUID(),
-      pageId: currentPageId,
+      pageId: draft.pageId,
       type: "pen",
       x: 0,
       y: 0,
@@ -1913,12 +2435,13 @@ function handleLayerPointerUp(event: PointerEvent): void {
   const width = Math.max(18, Math.abs(point.x - draft.startX));
   const height = Math.max(18, Math.abs(point.y - draft.startY));
   addBox(
-    currentPageId,
+    draft.pageId,
     draft.tool as Extract<Tool, "highlight" | "rect" | "redact">,
     left,
     top,
     width,
     height,
+    metrics,
   );
 }
 
@@ -1927,13 +2450,13 @@ function cancelDraft(): void {
   dragState = null;
 }
 
-function addText(pageId: string, x: number, y: number): void {
+function addText(pageId: string, x: number, y: number, metrics = fallbackMetrics(pageId)): void {
   const annotation: TextAnnotation = {
     id: crypto.randomUUID(),
     pageId,
     type: "text",
-    x: clamp(x / pageWidth, 0, 0.92),
-    y: clamp(y / pageHeight, 0, 0.94),
+    x: clamp(x / metrics.width, 0, 0.92),
+    y: clamp(y / metrics.height, 0, 0.94),
     width: 0.24,
     height: 0.06,
     color: "#172026",
@@ -1950,13 +2473,13 @@ function addText(pageId: string, x: number, y: number): void {
   renderCurrentLayer();
 }
 
-function addImage(pageId: string, x: number, y: number, dataUrl: string): void {
+function addImage(pageId: string, x: number, y: number, dataUrl: string, metrics = fallbackMetrics(pageId)): void {
   const annotation: ImageAnnotation = {
     id: crypto.randomUUID(),
     pageId,
     type: "image",
-    x: clamp(x / pageWidth, 0, 0.75),
-    y: clamp(y / pageHeight, 0, 0.75),
+    x: clamp(x / metrics.width, 0, 0.75),
+    y: clamp(y / metrics.height, 0, 0.75),
     width: 0.24,
     height: 0.16,
     color: "#172026",
@@ -1978,15 +2501,16 @@ function addBox(
   y: number,
   width: number,
   height: number,
+  metrics = fallbackMetrics(pageId),
 ): void {
   const annotation: BoxAnnotation = {
     id: crypto.randomUUID(),
     pageId,
     type: tool,
-    x: clamp(x / pageWidth, 0, 0.98),
-    y: clamp(y / pageHeight, 0, 0.98),
-    width: clamp(width / pageWidth, 0.02, 1),
-    height: clamp(height / pageHeight, 0.02, 1),
+    x: clamp(x / metrics.width, 0, 0.98),
+    y: clamp(y / metrics.height, 0, 0.98),
+    width: clamp(width / metrics.width, 0.02, 1),
+    height: clamp(height / metrics.height, 0.02, 1),
     color:
       tool === "highlight" ? "#ffe45c" : tool === "redact" ? "#ffffff" : "#176b58",
     opacity: tool === "highlight" ? 0.5 : 1,
@@ -2042,9 +2566,9 @@ function updateDrag(event: PointerEvent): void {
   if (!annotation) {
     return;
   }
-  setActivePageMetrics(annotation.pageId);
-  const deltaX = (event.clientX - dragState.startX) / pageWidth;
-  const deltaY = (event.clientY - dragState.startY) / pageHeight;
+  const metrics = metricsForPage(annotation.pageId) ?? fallbackMetrics(annotation.pageId);
+  const deltaX = (event.clientX - dragState.startX) / metrics.width;
+  const deltaY = (event.clientY - dragState.startY) / metrics.height;
 
   if (dragState.mode === "move") {
     annotation.x = clamp(dragState.original.x + deltaX, 0, 1 - annotation.width);
@@ -2259,12 +2783,12 @@ function sizeFields(annotation: Annotation): string {
 }
 
 function bindPageControls(): void {
-  byId("movePageUp").addEventListener("click", () => moveCurrentPage(-1));
-  byId("movePageDown").addEventListener("click", () => moveCurrentPage(1));
-  byId("rotatePage").addEventListener("click", rotateCurrentPage);
-  byId("duplicatePage").addEventListener("click", duplicateCurrentPage);
-  byId("extractPage").addEventListener("click", () => void extractCurrentPage());
-  byId("deletePage").addEventListener("click", deleteCurrentPage);
+  bindCommandButton("movePageUp", "move-page-up");
+  bindCommandButton("movePageDown", "move-page-down");
+  bindCommandButton("rotatePage", "rotate-page");
+  bindCommandButton("duplicatePage", "duplicate-page");
+  bindCommandButton("extractPage", "extract-page");
+  bindCommandButton("deletePage", "delete-page");
 }
 
 function bindDocumentControls(): void {
@@ -2612,6 +3136,8 @@ async function searchPdf(query: string): Promise<void> {
 
 function layoutCollisionWarnings(): string[] {
   const warnings: string[] = [];
+  const plan = semanticReflowPlan();
+  warnings.push(...plan.unresolvedCollisions);
   const textRects = editableFlowTextRects();
   for (const textRect of textRects) {
     if (textRect.y + textRect.height > 0.99) {
@@ -2669,20 +3195,20 @@ function editableFlowTextRects(): Array<{
       baselineHeight: annotation.eraseOriginal?.height ?? annotation.height,
     }));
 
-  for (const [pageId, items] of sourceTextItemsByPage.entries()) {
+  for (const items of sourceTextItemsByPage.values()) {
     for (const item of items) {
       if (isSourceTextAlreadyEdited(item.id)) {
         continue;
       }
-      const offset = sourceTextFlowOffset(item);
-      if (Math.abs(offset) < 0.05) {
+      const target = semanticReflowTarget(item);
+      if (!target) {
         continue;
       }
       rects.push({
-        pageId,
+        pageId: target.pageId,
         label: "연쇄 재배치",
         x: item.x,
-        y: clamp(item.y + offset, 0, 1 - item.height),
+        y: target.y,
         width: item.width,
         height: item.height,
         baselineX: item.x,
@@ -2941,10 +3467,6 @@ function buildEngineSourceTexts(pageIndexById: Map<string, number>): EngineSourc
 function buildEngineFlowOperations(pageIndexById: Map<string, number>): EngineOperation[] {
   const operations: EngineOperation[] = [];
   for (const [pageId, items] of sourceTextItemsByPage.entries()) {
-    const pageIndex = pageIndexById.get(pageId);
-    if (pageIndex === undefined) {
-      continue;
-    }
     if (layoutFlowSlicesForPage(pageId).length > 0) {
       continue;
     }
@@ -2952,15 +3474,33 @@ function buildEngineFlowOperations(pageIndexById: Map<string, number>): EngineOp
       if (isSourceTextAlreadyEdited(item.id)) {
         continue;
       }
-      const offset = sourceTextFlowOffset(item);
-      if (offset === 0) {
+      const target = semanticReflowTarget(item);
+      if (!target) {
         continue;
+      }
+      const sourcePageIndex = pageIndexById.get(pageId);
+      const targetPageIndex = pageIndexById.get(target.pageId);
+      if (sourcePageIndex === undefined || targetPageIndex === undefined) {
+        continue;
+      }
+      if (target.pageId !== pageId) {
+        operations.push({
+          type: "redact",
+          pageIndex: sourcePageIndex,
+          x: item.x,
+          y: item.y,
+          width: item.width,
+          height: item.height,
+          color: "#ffffff",
+          opacity: 1,
+          strokeWidth: 0,
+        });
       }
       operations.push({
         type: "text",
-        pageIndex,
+        pageIndex: targetPageIndex,
         x: item.x,
-        y: clamp(item.y + offset, 0, 1 - item.height),
+        y: target.y,
         width: item.width,
         height: item.height,
         text: item.text,
@@ -2971,12 +3511,14 @@ function buildEngineFlowOperations(pageIndexById: Map<string, number>): EngineOp
         opacity: 1,
         strokeWidth: 1,
         lineHeight: 1.25,
-        eraseOriginal: {
-          x: item.x,
-          y: item.y,
-          width: item.width,
-          height: item.height,
-        },
+        eraseOriginal: target.pageId === pageId
+          ? {
+              x: item.x,
+              y: item.y,
+              width: item.width,
+              height: item.height,
+            }
+          : undefined,
       });
     }
   }
@@ -3500,8 +4042,9 @@ function autoFitText(annotation: TextAnnotation): void {
   if (!context) {
     return;
   }
-  const pdfPageWidth = pageWidth > 0 ? pageWidth / zoom : 612;
-  const pdfPageHeight = pageHeight > 0 ? pageHeight / zoom : 792;
+  const metrics = metricsForPage(annotation.pageId) ?? activePageMetrics;
+  const pdfPageWidth = metrics ? metrics.width / zoom : 612;
+  const pdfPageHeight = metrics ? metrics.height / zoom : 792;
   const boxWidth = Math.max(16, annotation.width * pdfPageWidth - 4);
   context.font = `${annotation.fontSize}px ${annotation.fontFamily ?? defaultEditorFontFamily()}`;
   const lines = wrapText(context, annotation.text || " ", boxWidth);
@@ -3644,18 +4187,20 @@ async function requirePage(sourceIndex: number): Promise<pdfjs.PDFPageProxy> {
   return pdfDocument.getPage(sourceIndex + 1);
 }
 
-function eventPoint(event: PointerEvent, layer: HTMLElement): { x: number; y: number } {
+function eventPoint(event: PointerEvent, layer: HTMLElement, metrics = metricsForLayer(layer)): { x: number; y: number } {
   const rect = layer.getBoundingClientRect();
+  const width = metrics?.width ?? rect.width;
+  const height = metrics?.height ?? rect.height;
   return {
-    x: clamp(event.clientX - rect.left, 0, rect.width),
-    y: clamp(event.clientY - rect.top, 0, rect.height),
+    x: clamp(event.clientX - rect.left, 0, width),
+    y: clamp(event.clientY - rect.top, 0, height),
   };
 }
 
-function toRelativePoint(x: number, y: number): Point {
+function toRelativePoint(x: number, y: number, metrics: PageMetrics): Point {
   return {
-    x: clamp(x / pageWidth, 0, 1),
-    y: clamp(y / pageHeight, 0, 1),
+    x: clamp(x / metrics.width, 0, 1),
+    y: clamp(y / metrics.height, 0, 1),
   };
 }
 

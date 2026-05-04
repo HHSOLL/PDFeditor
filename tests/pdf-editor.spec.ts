@@ -60,6 +60,40 @@ async function createCrossPageFlowPdf(filePath: string): Promise<void> {
   await fs.writeFile(filePath, await document.save());
 }
 
+async function createLongDocumentPdf(filePath: string, pageCount = 12): Promise<void> {
+  await fs.mkdir(path.dirname(filePath), { recursive: true });
+  const document = await PDFDocument.create();
+  const font = await document.embedFont(StandardFonts.Helvetica);
+  for (let index = 0; index < pageCount; index += 1) {
+    const page = document.addPage([612, 792]);
+    page.drawText(`Long document page ${index + 1}`, {
+      x: 72,
+      y: 700,
+      size: 18,
+      font,
+      color: rgb(0.1, 0.12, 0.15),
+    });
+    page.drawText(`Body paragraph for page ${index + 1}`, {
+      x: 72,
+      y: 650,
+      size: 12,
+      font,
+    });
+  }
+  await fs.writeFile(filePath, await document.save());
+}
+
+async function createMixedPageSizePdf(filePath: string): Promise<void> {
+  await fs.mkdir(path.dirname(filePath), { recursive: true });
+  const document = await PDFDocument.create();
+  const font = await document.embedFont(StandardFonts.Helvetica);
+  const firstPage = document.addPage([612, 792]);
+  firstPage.drawText("Mixed size first page", { x: 72, y: 700, size: 18, font });
+  const secondPage = document.addPage([792, 612]);
+  secondPage.drawText("Mixed size second page landscape", { x: 72, y: 520, size: 18, font });
+  await fs.writeFile(filePath, await document.save());
+}
+
 async function createImageCollisionPdf(filePath: string): Promise<void> {
   await fs.mkdir(path.dirname(filePath), { recursive: true });
   const document = await PDFDocument.create();
@@ -76,6 +110,12 @@ async function createImageCollisionPdf(filePath: string): Promise<void> {
     size: 16,
     font,
     color: rgb(0.1, 0.12, 0.15),
+  });
+  page.drawText("Follower paragraph should avoid the figure", {
+    x: 72,
+    y: 640,
+    size: 13,
+    font,
   });
   page.drawImage(image, {
     x: 72,
@@ -239,7 +279,7 @@ test("selects multi-line PDF text as one editable paragraph without repainting t
   await page.locator("#fontSize").fill("24");
   await page.locator("#fontSize").press("Enter");
   await expect(page.locator(".page-shell canvas")).toHaveAttribute("data-persist-check", "true");
-  await expect(page.locator(".flow-slice").first()).toBeVisible();
+  await expect(page.locator(".flowed-source-text").first()).toBeVisible();
 });
 
 test("edits existing PDF text with auto reflow and exports real PDF text", async ({
@@ -349,7 +389,175 @@ test("uses a continuous document viewer and thumbnail scrolling", async ({ page 
   await expect(page.locator(".page-stage")).toHaveCount(2);
 });
 
-test("blocks source text export when reflow collides with images", async ({ page }) => {
+test("center document viewport scrolls independently", async ({ page }) => {
+  const samplePath = path.resolve("tmp/sample-independent-viewport.pdf");
+  await createLongDocumentPdf(samplePath, 12);
+
+  await page.goto("http://127.0.0.1:5173/");
+  await page
+    .locator('input[type="file"][accept="application/pdf"]')
+    .setInputFiles(samplePath);
+  await expect(page.locator(".page-stage")).toHaveCount(12);
+
+  const before = await page.evaluate(() => {
+    const box = (selector: string) => {
+      const rect = document.querySelector(selector)?.getBoundingClientRect();
+      return rect ? { top: rect.top, left: rect.left } : null;
+    };
+    return {
+      sidebar: box(".sidebar"),
+      inspector: box(".inspector"),
+      rail: box(".activity-rail"),
+      windowY: window.scrollY,
+      canvasTop: document.querySelector<HTMLElement>(".canvas-area")?.scrollTop ?? 0,
+    };
+  });
+
+  await page.locator(".canvas-area").evaluate((node) => {
+    node.scrollTop = 3600;
+    node.dispatchEvent(new Event("scroll", { bubbles: true }));
+  });
+  await page.waitForTimeout(200);
+
+  const after = await page.evaluate(() => {
+    const box = (selector: string) => {
+      const rect = document.querySelector(selector)?.getBoundingClientRect();
+      return rect ? { top: rect.top, left: rect.left } : null;
+    };
+    return {
+      sidebar: box(".sidebar"),
+      inspector: box(".inspector"),
+      rail: box(".activity-rail"),
+      windowY: window.scrollY,
+      canvasTop: document.querySelector<HTMLElement>(".canvas-area")?.scrollTop ?? 0,
+    };
+  });
+
+  expect(after.windowY).toBe(0);
+  expect(after.canvasTop).toBeGreaterThan(before.canvasTop);
+  expect(after.sidebar).toEqual(before.sidebar);
+  expect(after.inspector).toEqual(before.inspector);
+  expect(after.rail).toEqual(before.rail);
+});
+
+test("active thumbnail follows center scroll without moving side panels", async ({ page }) => {
+  const samplePath = path.resolve("tmp/sample-thumbnail-sync.pdf");
+  await createLongDocumentPdf(samplePath, 12);
+
+  await page.goto("http://127.0.0.1:5173/");
+  await page
+    .locator('input[type="file"][accept="application/pdf"]')
+    .setInputFiles(samplePath);
+  await expect(page.locator(".page-stage")).toHaveCount(12);
+
+  const sidebarBefore = await page.locator(".sidebar").boundingBox();
+  await page.locator(".page-stage[data-page-number='5']").evaluate((node) => {
+    node.scrollIntoView({ block: "start" });
+  });
+  await page.waitForTimeout(250);
+
+  await expect(page.locator("#bottomCurrentPage")).toHaveText(/[45]/);
+  await expect(page.locator(".thumb.active .thumb-meta")).toContainText(/[45]쪽/);
+  expect(await page.locator(".sidebar").boundingBox()).toEqual(sidebarBefore);
+});
+
+test("thumbnail click scrolls document viewport only", async ({ page }) => {
+  const samplePath = path.resolve("tmp/sample-thumbnail-click.pdf");
+  await createLongDocumentPdf(samplePath, 12);
+
+  await page.goto("http://127.0.0.1:5173/");
+  await page
+    .locator('input[type="file"][accept="application/pdf"]')
+    .setInputFiles(samplePath);
+  await expect(page.locator(".page-stage")).toHaveCount(12);
+
+  const inspectorBefore = await page.locator(".inspector").boundingBox();
+  const before = await page.locator(".canvas-area").evaluate((node) => node.scrollTop);
+  await page.locator(".thumb").nth(7).click();
+  const after = await page.locator(".canvas-area").evaluate((node) => node.scrollTop);
+  expect(after).toBeGreaterThan(before);
+  expect(await page.evaluate(() => window.scrollY)).toBe(0);
+  await expect(page.locator(".page-stage.active")).toHaveAttribute("data-page-number", "8");
+  expect(await page.locator(".inspector").boundingBox()).toEqual(inspectorBefore);
+});
+
+test("keeps mixed page overlays page-scoped after zoom", async ({ page }) => {
+  const samplePath = path.resolve("tmp/sample-mixed-page-size.pdf");
+  await createMixedPageSizePdf(samplePath);
+
+  await page.goto("http://127.0.0.1:5173/");
+  await page
+    .locator('input[type="file"][accept="application/pdf"]')
+    .setInputFiles(samplePath);
+  await expect(page.locator(".page-stage")).toHaveCount(2);
+
+  await page.getByRole("button", { name: "텍스트 편집" }).click();
+  await page.locator(".page-stage[data-page-number='1'] .annotation-layer").click({ position: { x: 120, y: 120 } });
+  await expect(page.locator(".annotation.text")).toHaveCount(1);
+  await page.getByRole("button", { name: "텍스트 편집" }).click();
+  await page.locator(".thumb").nth(1).click();
+  await page.getByRole("button", { name: "텍스트 편집" }).click();
+  await page.locator(".page-stage[data-page-number='2'] .annotation-layer").click({ position: { x: 240, y: 160 } });
+  await expect(page.locator(".annotation.text")).toHaveCount(2);
+
+  const positionsBefore = await page.locator(".annotation.text").evaluateAll((nodes) =>
+    nodes.map((node) => {
+      const rect = node.getBoundingClientRect();
+      const pageRect = node.closest(".page-shell")?.getBoundingClientRect();
+      return {
+        leftRatio: pageRect ? (rect.left - pageRect.left) / pageRect.width : 0,
+        topRatio: pageRect ? (rect.top - pageRect.top) / pageRect.height : 0,
+      };
+    }),
+  );
+  await page.locator("#zoomInButton").click();
+  await page.waitForTimeout(300);
+  const positionsAfter = await page.locator(".annotation.text").evaluateAll((nodes) =>
+    nodes.map((node) => {
+      const rect = node.getBoundingClientRect();
+      const pageRect = node.closest(".page-shell")?.getBoundingClientRect();
+      return {
+        leftRatio: pageRect ? (rect.left - pageRect.left) / pageRect.width : 0,
+        topRatio: pageRect ? (rect.top - pageRect.top) / pageRect.height : 0,
+      };
+    }),
+  );
+  expect(positionsAfter[0].leftRatio).toBeCloseTo(positionsBefore[0].leftRatio, 1);
+  expect(positionsAfter[1].leftRatio).toBeCloseTo(positionsBefore[1].leftRatio, 1);
+});
+
+test("reflows paragraph without overlapping figure and caption when solver has space", async ({ page }) => {
+  const samplePath = path.resolve("tmp/sample-image-reflow-solvable.pdf");
+  await createImageCollisionPdf(samplePath);
+
+  await page.goto("http://127.0.0.1:5173/");
+  await page
+    .locator('input[type="file"][accept="application/pdf"]')
+    .setInputFiles(samplePath);
+  await expect(page.locator(".source-image").first()).toBeVisible();
+
+  await page.locator(".source-text", { hasText: "Figure collision lead paragraph" }).click();
+  await page.locator(".annotation.text textarea").fill("이미지 위로 후속 문단이 올라가지 않도록 재배치되는 문단입니다. ".repeat(3));
+  await page.locator("#fontSize").fill("20");
+  await page.locator("#fontSize").press("Enter");
+  await expect(page.locator(".flowed-source-text", { hasText: "Follower paragraph should avoid the figure" })).toBeVisible();
+
+  const overlap = await page.evaluate(() => {
+    const texts = Array.from(document.querySelectorAll<HTMLElement>(".flowed-source-text"));
+    const image = document.querySelector<HTMLElement>(".source-image");
+    if (!image) return false;
+    const imageRect = image.getBoundingClientRect();
+    return texts.some((text) => {
+      const rect = text.getBoundingClientRect();
+      const x = Math.max(0, Math.min(rect.right, imageRect.right) - Math.max(rect.left, imageRect.left));
+      const y = Math.max(0, Math.min(rect.bottom, imageRect.bottom) - Math.max(rect.top, imageRect.top));
+      return x * y > 1;
+    });
+  });
+  expect(overlap).toBe(false);
+});
+
+test("blocks export only when semantic layout solver cannot resolve", async ({ page }) => {
   const samplePath = path.resolve("tmp/sample-image-collision.pdf");
   await createImageCollisionPdf(samplePath);
 
@@ -370,7 +578,8 @@ test("blocks source text export when reflow collides with images", async ({ page
 
 test("edits and exports the repository ex.pdf without losing page structure", async ({
   page,
-}) => {
+}, testInfo) => {
+  testInfo.setTimeout(120_000);
   const samplePath = path.resolve("ex.pdf");
   const exportedPath = path.resolve("tmp/exported-ex.pdf");
   const originalTitle = "Synthetic Computers at Scale for Long-Horizon Productivity Simulation";

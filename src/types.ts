@@ -125,6 +125,7 @@ export interface DragState {
 export interface DraftState {
   type: "box" | "pen";
   tool: Extract<Tool, "highlight" | "rect" | "redact" | "pen">;
+  pageId: string;
   startX: number;
   startY: number;
   points: Point[];
@@ -156,6 +157,7 @@ export interface SourceMask {
 export interface FlowedSourceText {
   id: string;
   item: SourceTextItem;
+  pageId: string;
   y: number;
 }
 

@@ -6,7 +6,7 @@ behavior is verified with fixtures and compatibility checks.
 | Area | Points | Current | Completion Evidence |
 | --- | ---: | --- | --- |
 | Core PDF compatibility | 15 | Strict local validation and qpdf are in place | 100+ corpus PDFs pass open/render/export/reopen |
-| Edit PDF | 15 | Redaction plus replacement text; new image/text objects | Text/image/vector fixtures roundtrip with 2px tolerance |
+| Edit PDF | 15 | Redaction plus replacement text; first-pass semantic paragraph reflow; new image/text objects | Text/image/vector fixtures roundtrip with 2px tolerance |
 | Page organization | 8 | Delete, reorder, rotate, duplicate, extract | Merge/split/crop/replace plus bookmarks/links/forms remap |
 | Comments/annotations | 8 | New annotations plus existing Square/FreeText/Highlight/Ink import/edit/delete path | Acrobat/Preview/Chrome annotations import/edit/delete/flatten |
 | Forms | 10 | AcroForm text and checkbox fill/save, engine flatten path | AcroForm fields fill/save/flatten with appearance regeneration |
@@ -24,3 +24,13 @@ The current project is a verified advanced prototype, not an Acrobat Pro
 replacement. It scores highest in save validation and is now beginning the
 forms and imported-annotation lanes; signatures, OCR, accessibility, and
 preflight remain mostly unimplemented.
+
+## Current Reflow Score Boundary
+
+The current semantic reflow implementation is a first pass, not full Acrobat
+inline editing. It groups extractable horizontal text into paragraph blocks,
+moves downstream text in the same flow, avoids protected figure/image/caption
+blocks, and can cascade moved text to following pages. It does not yet move
+existing vector tables or original image objects as native PDF objects. Export
+is blocked when the solver cannot produce a non-overlapping searchable text
+layout.
