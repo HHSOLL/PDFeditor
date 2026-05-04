@@ -32,6 +32,34 @@ async function createSamplePdf(filePath: string): Promise<void> {
   await fs.writeFile(filePath, await document.save());
 }
 
+async function createCrossPageFlowPdf(filePath: string): Promise<void> {
+  await fs.mkdir(path.dirname(filePath), { recursive: true });
+  const document = await PDFDocument.create();
+  const font = await document.embedFont(StandardFonts.Helvetica);
+  const firstPage = document.addPage([612, 792]);
+  firstPage.drawText("Flow lead paragraph", {
+    x: 72,
+    y: 700,
+    size: 16,
+    font,
+    color: rgb(0.1, 0.12, 0.15),
+  });
+  firstPage.drawText("Stable image-adjacent line", {
+    x: 72,
+    y: 620,
+    size: 13,
+    font,
+  });
+  const secondPage = document.addPage([612, 792]);
+  secondPage.drawText("Following page paragraph should move with document reflow", {
+    x: 72,
+    y: 700,
+    size: 14,
+    font,
+  });
+  await fs.writeFile(filePath, await document.save());
+}
+
 function runPython(script: string, args: string[] = []): Promise<string> {
   return new Promise((resolve, reject) => {
     const child = spawn("python3", ["-c", script, ...args], {
@@ -171,7 +199,11 @@ test("selects multi-line PDF text as one editable paragraph without repainting t
   await expect(editor).toBeVisible();
   await expect(editor).toHaveValue(/This paragraph can be covered and rewritten\..*Second sentence shares/s);
   await expect(page.locator("#fontSize")).toHaveValue("12");
+  await page.keyboard.press("Escape");
+  await expect(page.locator(".annotation.selected")).toHaveCount(0);
+  await expect(page.locator(".annotation.text textarea")).toHaveCount(0);
 
+  await page.locator(".annotation.text").click();
   await page.locator("#fontSize").fill("24");
   await page.locator("#fontSize").press("Enter");
   await expect(page.locator(".page-shell canvas")).toHaveAttribute("data-persist-check", "true");
@@ -235,6 +267,35 @@ test("edits existing PDF text with auto reflow and exports real PDF text", async
   await expect(page.locator(".source-text", { hasText: "Original contract title" })).toHaveCount(0);
 });
 
+test("cascades text reflow to following pages and clears selection with Escape", async ({
+  page,
+}) => {
+  const samplePath = path.resolve("tmp/sample-cross-page-flow.pdf");
+  await createCrossPageFlowPdf(samplePath);
+
+  await page.goto("http://127.0.0.1:5173/");
+  await page
+    .locator('input[type="file"][accept="application/pdf"]')
+    .setInputFiles(samplePath);
+  await expect(page.locator("#pageCount")).toHaveText("2쪽");
+
+  await page.locator(".source-text", { hasText: "Flow lead paragraph" }).click();
+  const editor = page.locator(".annotation.text textarea");
+  await expect(editor).toBeVisible();
+  await editor.fill("첫 페이지에서 길게 늘어난 문단입니다. ".repeat(18));
+  await page.locator("#fontSize").fill("36");
+  await page.locator("#fontSize").press("Enter");
+
+  await page.keyboard.press("Escape");
+  await expect(page.locator(".annotation.selected")).toHaveCount(0);
+  await expect(page.locator(".annotation.text textarea")).toHaveCount(0);
+
+  await page.locator(".thumb").nth(1).click();
+  await expect(page.locator(".flowed-source-text", {
+    hasText: "Following page paragraph should move with document reflow",
+  })).toBeVisible();
+});
+
 test("edits and exports the repository ex.pdf without losing page structure", async ({
   page,
 }) => {
@@ -257,6 +318,9 @@ test("edits and exports the repository ex.pdf without losing page structure", as
   const editor = page.locator(".annotation.text textarea");
   await expect(editor).toBeVisible();
   await editor.fill(replacementTitle);
+  await page.keyboard.press("Escape");
+  await expect(page.locator(".annotation.selected")).toHaveCount(0);
+  await expect(page.locator(".annotation.text textarea")).toHaveCount(0);
   const firstSourceImage = page.locator(".source-image").first();
   await expect(firstSourceImage).toBeVisible({ timeout: 45_000 });
   await firstSourceImage.click();

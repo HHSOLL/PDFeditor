@@ -3,8 +3,8 @@
   font-family:
     AppleGothic, Inter, ui-sans-serif, system-ui, -apple-system,
     BlinkMacSystemFont, "Segoe UI", sans-serif;
-  background: #eef1f4;
-  color: #172026;
+  background: #f4f6f8;
+  color: #101828;
 }
 
 * {
@@ -15,7 +15,7 @@ body {
   margin: 0;
   min-width: 320px;
   min-height: 100vh;
-  background: #eef1f4;
+  background: #f4f6f8;
 }
 
 button,
@@ -31,65 +31,145 @@ button {
 
 .app-shell {
   display: grid;
-  grid-template-rows: 58px minmax(0, 1fr);
+  grid-template-rows: 58px 44px 64px minmax(0, 1fr) 38px;
   min-height: 100vh;
 }
 
-.topbar {
+.app-header {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
-  gap: 16px;
+  grid-template-columns: 190px minmax(0, 1fr) auto;
+  gap: 0;
   align-items: center;
-  padding: 10px 14px;
-  border-bottom: 1px solid #d6dde4;
-  background: #fbfcfd;
-  box-shadow: 0 1px 2px rgba(23, 32, 38, 0.04);
+  border-bottom: 1px solid #dde3ea;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.94), rgba(246, 248, 251, 0.94)),
+    #fff;
   z-index: 10;
 }
 
-.brand {
+.app-brand {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 11px;
+  height: 100%;
+  padding: 0 20px;
+  border-right: 1px solid #e4e9ef;
   min-width: 0;
 }
 
 .brand-mark {
   display: grid;
   place-items: center;
-  width: 34px;
-  height: 34px;
-  border-radius: 8px;
-  background: #172026;
+  width: 25px;
+  height: 25px;
+  border-radius: 6px;
+  background: #e93f3f;
   color: #fff;
-  font-size: 13px;
+  font-size: 9px;
   font-weight: 800;
   letter-spacing: 0;
 }
 
-.brand-title {
-  display: grid;
-  gap: 1px;
+.app-brand strong {
+  color: #111827;
+  font-size: 15px;
+  line-height: 1;
 }
 
-.brand-title strong {
+.document-tabs {
+  display: flex;
+  align-items: end;
+  height: 100%;
+  min-width: 0;
+  padding-left: 14px;
+}
+
+.doc-tab {
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  width: min(250px, 42vw);
+  height: 48px;
+  border: 1px solid #e1e7ee;
+  border-bottom-color: #fff;
+  border-radius: 10px 10px 0 0;
+  padding: 0 14px;
+  background: #fff;
+  color: #111827;
   font-size: 14px;
-  line-height: 1.2;
+  font-weight: 700;
 }
 
-.brand-title span {
+.doc-tab span:first-child {
   overflow: hidden;
-  max-width: 220px;
-  color: #687684;
-  font-size: 12px;
-  line-height: 1.2;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
+.new-tab,
+.kebab-btn {
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+  background: transparent;
+  color: #111827;
+  cursor: pointer;
+  font-size: 22px;
+}
+
+.new-tab {
+  margin: 0 0 6px 8px;
+}
+
+.app-actions {
+  display: flex;
+  align-items: center;
+  justify-content: end;
+  gap: 12px;
+  height: 100%;
+  padding: 0 20px;
+}
+
+.saved-state {
+  color: #4b5563;
+  font-size: 12px;
+}
+
+.menu-bar {
+  display: flex;
+  align-items: center;
+  gap: 28px;
+  padding: 0 30px;
+  border-bottom: 1px solid #dfe5eb;
+  background: #fff;
+}
+
+.menu-bar button {
+  height: 100%;
+  background: transparent;
+  color: #111827;
+  cursor: pointer;
+  font-size: 14px;
+}
+
+.ribbon {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 20px;
+  padding: 10px 28px;
+  border-bottom: 1px solid #d8dee7;
+  background: #fff;
+  box-shadow: 0 1px 3px rgba(16, 24, 40, 0.04);
+  z-index: 9;
+}
+
 .toolbar {
   display: flex;
-  gap: 6px;
+  gap: 12px;
   align-items: center;
   min-width: 0;
   overflow-x: auto;
@@ -104,8 +184,8 @@ button {
   justify-content: center;
   min-height: 36px;
   border: 1px solid transparent;
-  border-radius: 7px;
-  color: #25313b;
+  border-radius: 8px;
+  color: #1f2937;
   background: transparent;
   cursor: pointer;
   transition:
@@ -115,13 +195,24 @@ button {
 }
 
 .tool-btn {
-  gap: 6px;
-  padding: 0 10px;
+  gap: 8px;
+  padding: 0 12px;
   white-space: nowrap;
+  font-size: 14px;
 }
 
 .icon-btn {
   width: 36px;
+  min-width: 36px;
+  font-size: 18px;
+}
+
+.tool-icon {
+  display: inline-grid;
+  place-items: center;
+  min-width: 18px;
+  color: currentColor;
+  font-weight: 800;
 }
 
 .tool-btn:hover,
@@ -131,9 +222,10 @@ button {
 }
 
 .tool-btn.active {
-  border-color: #a7c8f0;
-  background: #e3f0ff;
-  color: #0b5cad;
+  border-color: #8db8ff;
+  background: #edf4ff;
+  color: #155eef;
+  box-shadow: 0 0 0 1px rgba(21, 94, 239, 0.08);
 }
 
 .action-btn {
@@ -143,12 +235,57 @@ button {
 }
 
 .primary {
-  background: #176b58;
+  background: #2563eb;
   color: #fff;
 }
 
 .primary:hover {
-  background: #115847;
+  background: #1d4ed8;
+}
+
+.ribbon-controls,
+.bottom-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.zoom-chip,
+.page-number-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 64px;
+  height: 36px;
+  border: 1px solid #d9e0e8;
+  border-radius: 8px;
+  background: #fff;
+  color: #111827;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.page-number-chip {
+  min-width: 40px;
+}
+
+.view-mode,
+.keyboard-btn {
+  display: inline-grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: #1f2937;
+  cursor: pointer;
+}
+
+.view-mode.active {
+  border-color: #9ac0ff;
+  background: #eef5ff;
+  color: #155eef;
 }
 
 .toolbar-separator {
@@ -160,8 +297,40 @@ button {
 
 .workspace {
   display: grid;
-  grid-template-columns: 190px minmax(0, 1fr) 280px;
+  grid-template-columns: 76px 258px minmax(0, 1fr) 318px;
   min-height: 0;
+}
+
+.activity-rail {
+  display: grid;
+  align-content: start;
+  gap: 12px;
+  padding: 16px 12px;
+  border-right: 1px solid #dde4ec;
+  background: #f8fafc;
+}
+
+.rail-item {
+  display: grid;
+  gap: 6px;
+  justify-items: center;
+  min-height: 62px;
+  border: 1px solid transparent;
+  border-radius: 12px;
+  background: transparent;
+  color: #334155;
+  cursor: pointer;
+  font-size: 18px;
+}
+
+.rail-item small {
+  font-size: 11px;
+}
+
+.rail-item.active {
+  border-color: #dbeafe;
+  background: #eff6ff;
+  color: #155eef;
 }
 
 .sidebar,
@@ -169,7 +338,7 @@ button {
   min-height: 0;
   overflow: auto;
   border-right: 1px solid #d6dde4;
-  background: #f8fafb;
+  background: #f9fafb;
 }
 
 .inspector {
@@ -184,35 +353,35 @@ button {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 13px 14px;
+  padding: 18px 20px 12px;
   border-bottom: 1px solid #dfe5eb;
   background: rgba(248, 250, 251, 0.96);
   backdrop-filter: blur(10px);
 }
 
 .panel-head strong {
-  font-size: 13px;
+  font-size: 15px;
 }
 
 .page-list {
   display: grid;
-  gap: 10px;
-  padding: 12px;
+  gap: 22px;
+  padding: 18px 20px 24px;
 }
 
 .thumb {
   display: grid;
-  gap: 7px;
-  padding: 8px;
-  border: 1px solid #d8e0e7;
+  gap: 10px;
+  padding: 10px;
+  border: 2px solid transparent;
   border-radius: 8px;
   background: #fff;
   cursor: pointer;
 }
 
 .thumb.active {
-  border-color: #176b58;
-  box-shadow: 0 0 0 2px rgba(23, 107, 88, 0.14);
+  border-color: #2563eb;
+  box-shadow: 0 8px 20px rgba(37, 99, 235, 0.12);
 }
 
 .thumb canvas {
@@ -244,11 +413,7 @@ button {
   min-width: 0;
   min-height: 0;
   overflow: auto;
-  background:
-    linear-gradient(90deg, rgba(255, 255, 255, 0.5) 1px, transparent 1px),
-    linear-gradient(rgba(255, 255, 255, 0.5) 1px, transparent 1px),
-    #e8ecef;
-  background-size: 28px 28px;
+  background: #edf0f3;
 }
 
 .empty-state {
@@ -304,13 +469,15 @@ button {
   place-items: start center;
   min-width: max-content;
   min-height: 100%;
-  padding: 38px;
+  padding: 24px 38px;
 }
 
 .page-shell {
   position: relative;
   background: #fff;
-  box-shadow: 0 24px 80px rgba(23, 32, 38, 0.22);
+  box-shadow:
+    0 1px 2px rgba(16, 24, 40, 0.08),
+    0 22px 65px rgba(16, 24, 40, 0.16);
 }
 
 .page-shell canvas {
@@ -398,7 +565,7 @@ button {
 }
 
 .annotation.source-edit {
-  background: #fff;
+  background: transparent;
 }
 
 .annotation.rect {
@@ -572,13 +739,30 @@ button {
   box-shadow: 0 16px 48px rgba(23, 32, 38, 0.25);
 }
 
+.bottom-bar {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  min-height: 38px;
+  padding: 0 18px;
+  border-top: 1px solid #dce3eb;
+  background: rgba(255, 255, 255, 0.94);
+  backdrop-filter: blur(12px);
+}
+
+.keyboard-btn {
+  justify-self: end;
+  width: 30px;
+  height: 30px;
+}
+
 .hidden {
   display: none !important;
 }
 
 @media (max-width: 1040px) {
   .workspace {
-    grid-template-columns: 150px minmax(0, 1fr);
+    grid-template-columns: 64px 170px minmax(0, 1fr);
   }
 
   .inspector {
@@ -595,18 +779,30 @@ button {
 
 @media (max-width: 760px) {
   .app-shell {
-    grid-template-rows: auto minmax(0, 1fr);
+    grid-template-rows: auto auto auto minmax(0, 1fr) auto;
   }
 
-  .topbar {
+  .app-header,
+  .ribbon {
     grid-template-columns: 1fr;
     align-items: stretch;
+  }
+
+  .app-brand {
+    border-right: 0;
+  }
+
+  .menu-bar {
+    gap: 16px;
+    overflow-x: auto;
+    padding: 0 16px;
   }
 
   .workspace {
     grid-template-columns: 1fr;
   }
 
+  .activity-rail,
   .sidebar {
     display: none;
   }

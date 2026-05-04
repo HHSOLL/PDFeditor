@@ -463,20 +463,7 @@ def apply_redaction_phase(
     force_image_removal = False
     for operation in operations:
         if operation["type"] == "text" and isinstance(operation.get("eraseOriginal"), dict):
-            edit_rect = to_rect(operation, metrics)
             source_rect = to_rect(operation["eraseOriginal"], metrics)
-            if edit_rect.height > source_rect.height * 1.5:
-                page.add_redact_annot(
-                    fitz.Rect(
-                        min(edit_rect.x0, source_rect.x0),
-                        min(edit_rect.y0, source_rect.y0),
-                        metrics.width,
-                        max(edit_rect.y1, source_rect.y1),
-                    ),
-                    fill=(1, 1, 1),
-                )
-            else:
-                page.add_redact_annot(edit_rect, fill=(1, 1, 1))
             page.add_redact_annot(source_rect, fill=(1, 1, 1))
             has_redactions = True
         elif operation["type"] == "redact":

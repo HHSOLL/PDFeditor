@@ -78,13 +78,13 @@ let redoStack: Snapshot[] = [];
 let toastTimer = 0;
 let renderCycle = 0;
 
-const tools: Array<{ id: Tool; label: string }> = [
-  { id: "select", label: "선택" },
-  { id: "text", label: "텍스트" },
-  { id: "highlight", label: "형광펜" },
-  { id: "rect", label: "박스" },
-  { id: "redact", label: "가리기" },
-  { id: "pen", label: "펜" },
+const tools: Array<{ id: Tool; label: string; icon: string }> = [
+  { id: "select", label: "선택", icon: "↖" },
+  { id: "text", label: "텍스트 편집", icon: "T" },
+  { id: "highlight", label: "강조", icon: "▰" },
+  { id: "pen", label: "그리기", icon: "╱" },
+  { id: "rect", label: "도형", icon: "□" },
+  { id: "redact", label: "지우기", icon: "⌫" },
 ];
 
 const dom = {
@@ -118,25 +118,55 @@ type EngineExtractResponse = {
 function renderApp(): void {
   appRoot.innerHTML = `
     <main class="app-shell">
-      <header class="topbar">
-        <section class="brand">
+      <header class="app-header">
+        <section class="app-brand" aria-label="앱">
           <div class="brand-mark">PDF</div>
-          <div class="brand-title">
-            <strong>PDF Studio</strong>
-            <span id="documentName">문서를 열어주세요</span>
-          </div>
+          <strong>PDF 편집기</strong>
         </section>
-        <nav class="toolbar" id="toolbar" aria-label="PDF 편집 도구"></nav>
-        <section class="toolbar" aria-label="문서 작업">
-          <button class="action-btn" id="openButton" type="button">열기</button>
+        <section class="document-tabs" aria-label="열린 문서">
+          <button class="doc-tab active" type="button">
+            <span id="documentName">문서를 열어주세요</span>
+            <span aria-hidden="true">×</span>
+          </button>
+          <button class="new-tab" type="button" title="새 탭">+</button>
+        </section>
+        <section class="app-actions" aria-label="문서 작업">
+          <span class="saved-state">● 저장됨</span>
           <button class="icon-btn" id="undoButton" type="button" title="실행 취소">↶</button>
           <button class="icon-btn" id="redoButton" type="button" title="다시 실행">↷</button>
-          <button class="icon-btn" id="zoomOutButton" type="button" title="축소">−</button>
-          <button class="icon-btn" id="zoomInButton" type="button" title="확대">+</button>
-          <button class="action-btn primary" id="exportButton" type="button">PDF 내보내기</button>
+          <button class="action-btn primary" id="exportButton" type="button" aria-label="PDF 내보내기">저장</button>
+          <button class="kebab-btn" type="button" title="더보기">⋮</button>
         </section>
       </header>
+      <nav class="menu-bar" aria-label="문서 메뉴">
+        <button id="openButton" type="button">파일</button>
+        <button type="button">편집</button>
+        <button type="button">보기</button>
+        <button type="button">삽입</button>
+        <button type="button">주석</button>
+        <button type="button">페이지</button>
+        <button type="button">도구</button>
+        <button type="button">양식</button>
+        <button type="button">보안</button>
+      </nav>
+      <section class="ribbon" aria-label="PDF 편집 도구">
+        <nav class="toolbar" id="toolbar" aria-label="PDF 편집 도구"></nav>
+        <section class="ribbon-controls" aria-label="보기 설정">
+          <button class="icon-btn" id="zoomOutButton" type="button" title="축소">−</button>
+          <span class="zoom-chip" data-zoom-label>100%</span>
+          <button class="icon-btn" id="zoomInButton" type="button" title="확대">+</button>
+          <button class="view-mode active" type="button" title="단일 페이지">▣</button>
+          <button class="view-mode" type="button" title="맞춤 보기">▤</button>
+        </section>
+      </section>
       <section class="workspace">
+        <aside class="activity-rail" aria-label="패널">
+          <button class="rail-item active" type="button"><span>▯</span><small>페이지</small></button>
+          <button class="rail-item" type="button"><span>⌑</span><small>북마크</small></button>
+          <button class="rail-item" type="button"><span>☰</span><small>주석</small></button>
+          <button class="rail-item" type="button"><span>▤</span><small>양식</small></button>
+          <button class="rail-item" type="button"><span>⌘</span><small>첨부파일</small></button>
+        </aside>
         <aside class="sidebar">
           <div class="panel-head">
             <strong>페이지</strong>
@@ -153,6 +183,20 @@ function renderApp(): void {
           <div class="inspector-body" id="inspectorBody"></div>
         </aside>
       </section>
+      <footer class="bottom-bar">
+        <div></div>
+        <section class="bottom-controls" aria-label="페이지 보기">
+          <button class="icon-btn" type="button" title="이전 페이지">‹</button>
+          <span class="page-number-chip">1</span>
+          <span class="status-line">/ <span id="bottomPageCount">0</span></span>
+          <button class="icon-btn" type="button" title="다음 페이지">›</button>
+          <span class="toolbar-separator"></span>
+          <button class="icon-btn" id="zoomOutFooter" type="button" title="축소">−</button>
+          <span class="zoom-chip" data-zoom-label>100%</span>
+          <button class="icon-btn" id="zoomInFooter" type="button" title="확대">+</button>
+        </section>
+        <button class="keyboard-btn" type="button" title="단축키">⌨</button>
+      </footer>
       <div class="toast hidden" id="toast" role="status" aria-live="polite"></div>
     </main>
   `;
@@ -168,6 +212,7 @@ function renderApp(): void {
   bindStaticEvents();
   renderToolbar();
   renderDocumentName();
+  syncZoomLabels();
   renderWorkspace();
   renderInspector();
 }
@@ -179,6 +224,8 @@ function bindStaticEvents(): void {
   byId("redoButton").addEventListener("click", redo);
   byId("zoomOutButton").addEventListener("click", () => setZoom(zoom - 0.15));
   byId("zoomInButton").addEventListener("click", () => setZoom(zoom + 0.15));
+  byId("zoomOutFooter").addEventListener("click", () => setZoom(zoom - 0.15));
+  byId("zoomInFooter").addEventListener("click", () => setZoom(zoom + 0.15));
 
   dom.fileInput.addEventListener("change", () => {
     const file = dom.fileInput.files?.[0];
@@ -205,6 +252,11 @@ function bindStaticEvents(): void {
   });
 
   window.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      clearSelection();
+      return;
+    }
     if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "z") {
       event.preventDefault();
       if (event.shiftKey) {
@@ -233,7 +285,7 @@ function renderToolbar(): void {
     const button = document.createElement("button");
     button.type = "button";
     button.className = `tool-btn${currentTool === tool.id ? " active" : ""}`;
-    button.textContent = tool.label;
+    button.innerHTML = `<span class="tool-icon">${tool.icon}</span><span>${tool.label}</span>`;
     button.addEventListener("click", () => {
       currentTool = tool.id;
       pendingImageDataUrl = null;
@@ -247,7 +299,7 @@ function renderToolbar(): void {
   const imageButton = document.createElement("button");
   imageButton.type = "button";
   imageButton.className = "tool-btn";
-  imageButton.textContent = "이미지";
+  imageButton.innerHTML = `<span class="tool-icon">▧</span><span>이미지</span>`;
   imageButton.addEventListener("click", () => dom.imageInput.click());
   toolbar.append(imageButton);
 
@@ -367,12 +419,16 @@ async function renderWorkspace(): Promise<void> {
   const cycle = ++renderCycle;
   const pageList = byId("pageList");
   const pageCount = byId("pageCount");
+  const bottomPageCount = document.querySelector<HTMLElement>("#bottomPageCount");
   const canvasArea = byId("canvasArea");
   pageList.innerHTML = "";
   canvasArea.innerHTML = "";
 
   if (!pdfDocument || !currentPageId) {
     pageCount.textContent = "0";
+    if (bottomPageCount) {
+      bottomPageCount.textContent = "0";
+    }
     canvasArea.innerHTML = `
       <div class="empty-state">
         <div class="empty-card">
@@ -393,6 +449,10 @@ async function renderWorkspace(): Promise<void> {
   }
 
   pageCount.textContent = `${pageItems.length}쪽`;
+  if (bottomPageCount) {
+    bottomPageCount.textContent = `${pageItems.length}`;
+  }
+  syncZoomLabels();
   for (let index = 0; index < pageItems.length; index += 1) {
     const item = pageItems[index];
     const thumbnail = await renderThumbnail(item, index);
@@ -945,25 +1005,42 @@ function flowedSourceTextsForPage(pageId: string): FlowedSourceText[] {
 }
 
 function sourceEditAnnotations(pageId: string): TextAnnotation[] {
-  return annotations.filter(
-    (annotation): annotation is TextAnnotation =>
-      annotation.pageId === pageId &&
-      annotation.type === "text" &&
-      Boolean(annotation.sourceTextId) &&
-      Boolean(annotation.eraseOriginal),
-  );
+  return sourceEditAnnotationsInDocument().filter((annotation) => annotation.pageId === pageId);
+}
+
+function sourceEditAnnotationsInDocument(): TextAnnotation[] {
+  const pageOrder = new Map(pageItems.map((item, index) => [item.id, index]));
+  return annotations
+    .filter(
+      (annotation): annotation is TextAnnotation =>
+        annotation.type === "text" &&
+        Boolean(annotation.sourceTextId) &&
+        Boolean(annotation.eraseOriginal),
+    )
+    .sort((left, right) => {
+      const pageDelta = (pageOrder.get(left.pageId) ?? 0) - (pageOrder.get(right.pageId) ?? 0);
+      return pageDelta || left.y - right.y;
+    });
 }
 
 function sourceTextFlowOffset(sourceText: SourceTextItem): number {
   if (!sourceText.reflowable) {
     return 0;
   }
+  const sourcePageIndex = pageItems.findIndex((item) => item.id === sourceText.pageId);
+  if (sourcePageIndex < 0) {
+    return 0;
+  }
   let offset = 0;
-  for (const annotation of sourceEditAnnotations(sourceText.pageId)) {
+  for (const annotation of sourceEditAnnotationsInDocument()) {
     if (!annotation.eraseOriginal || annotation.sourceTextId === sourceText.id) {
       continue;
     }
-    if (isBelowSameFlow(sourceText, annotation)) {
+    const annotationPageIndex = pageItems.findIndex((item) => item.id === annotation.pageId);
+    const delta = annotation.height - annotation.eraseOriginal.height;
+    if (annotationPageIndex >= 0 && annotationPageIndex < sourcePageIndex) {
+      offset += Math.max(0, delta);
+    } else if (annotation.pageId === sourceText.pageId && isBelowSameFlow(sourceText, annotation)) {
       offset += annotation.height - annotation.eraseOriginal.height;
     }
   }
@@ -1450,7 +1527,7 @@ function mergeLinesIntoBlocks(lines: SourceTextItem[]): SourceTextItem[] {
     if (previous && shouldMergeLineIntoBlock(previous, line)) {
       const right = Math.max(previous.x + previous.width, line.x + line.width);
       const bottom = Math.max(previous.y + previous.height, line.y + line.height);
-      previous.text = `${previous.text} ${line.text}`;
+      previous.text = `${previous.text}\n${line.text}`;
       previous.x = Math.min(previous.x, line.x);
       previous.y = Math.min(previous.y, line.y);
       previous.width = right - previous.x;
@@ -3126,7 +3203,28 @@ function wrapText(context: CanvasRenderingContext2D, text: string, maxWidth: num
 
 function setZoom(value: number): void {
   zoom = clamp(value, 0.45, 2.4);
+  syncZoomLabels();
   refreshAll(false);
+}
+
+function syncZoomLabels(): void {
+  document.querySelectorAll<HTMLElement>("[data-zoom-label]").forEach((element) => {
+    element.textContent = `${Math.round(zoom * 100)}%`;
+  });
+}
+
+function clearSelection(): void {
+  if (document.activeElement instanceof HTMLElement) {
+    document.activeElement.blur();
+  }
+  selectedId = null;
+  dragState = null;
+  draftState = null;
+  pendingImageDataUrl = null;
+  currentTool = "select";
+  renderToolbar();
+  renderInspector();
+  renderCurrentLayer();
 }
 
 function commitHistory(): void {
