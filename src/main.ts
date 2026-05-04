@@ -77,6 +77,9 @@ let undoStack: Snapshot[] = [];
 let redoStack: Snapshot[] = [];
 let toastTimer = 0;
 let renderCycle = 0;
+let pageScrollLockUntil = 0;
+let pageVisibilityObserver: IntersectionObserver | null = null;
+let pageMetricsById = new Map<string, { width: number; height: number }>();
 
 const tools: Array<{ id: Tool; label: string; icon: string }> = [
   { id: "select", label: "선택", icon: "↖" },
@@ -124,30 +127,30 @@ function renderApp(): void {
           <strong>PDF 편집기</strong>
         </section>
         <section class="document-tabs" aria-label="열린 문서">
-          <button class="doc-tab active" type="button">
+          <button class="doc-tab active" type="button" disabled title="문서 탭 관리는 아직 지원하지 않습니다.">
             <span id="documentName">문서를 열어주세요</span>
             <span aria-hidden="true">×</span>
           </button>
-          <button class="new-tab" type="button" title="새 탭">+</button>
+          <button class="new-tab" type="button" disabled title="새 탭은 아직 지원하지 않습니다.">+</button>
         </section>
         <section class="app-actions" aria-label="문서 작업">
           <span class="saved-state">● 저장됨</span>
           <button class="icon-btn" id="undoButton" type="button" title="실행 취소">↶</button>
           <button class="icon-btn" id="redoButton" type="button" title="다시 실행">↷</button>
           <button class="action-btn primary" id="exportButton" type="button" aria-label="PDF 내보내기">저장</button>
-          <button class="kebab-btn" type="button" title="더보기">⋮</button>
+          <button class="kebab-btn" type="button" disabled title="추가 메뉴는 아직 지원하지 않습니다.">⋮</button>
         </section>
       </header>
       <nav class="menu-bar" aria-label="문서 메뉴">
         <button id="openButton" type="button">파일</button>
-        <button type="button">편집</button>
-        <button type="button">보기</button>
-        <button type="button">삽입</button>
-        <button type="button">주석</button>
-        <button type="button">페이지</button>
-        <button type="button">도구</button>
-        <button type="button">양식</button>
-        <button type="button">보안</button>
+        <button type="button" disabled title="상단 메뉴 명령은 툴바와 속성 패널에서 제공합니다.">편집</button>
+        <button type="button" disabled title="보기 명령은 확대/축소 컨트롤에서 제공합니다.">보기</button>
+        <button type="button" disabled title="삽입 명령은 툴바에서 제공합니다.">삽입</button>
+        <button type="button" disabled title="주석 명령은 툴바에서 제공합니다.">주석</button>
+        <button type="button" disabled title="페이지 명령은 오른쪽 속성 패널에서 제공합니다.">페이지</button>
+        <button type="button" disabled title="도구 모음에 구현된 기능만 표시합니다.">도구</button>
+        <button type="button" disabled title="폼 기능은 기존 필드 작성부터 지원합니다.">양식</button>
+        <button type="button" disabled title="보안 기능은 가리기 정책부터 지원합니다.">보안</button>
       </nav>
       <section class="ribbon" aria-label="PDF 편집 도구">
         <nav class="toolbar" id="toolbar" aria-label="PDF 편집 도구"></nav>
@@ -155,17 +158,17 @@ function renderApp(): void {
           <button class="icon-btn" id="zoomOutButton" type="button" title="축소">−</button>
           <span class="zoom-chip" data-zoom-label>100%</span>
           <button class="icon-btn" id="zoomInButton" type="button" title="확대">+</button>
-          <button class="view-mode active" type="button" title="단일 페이지">▣</button>
-          <button class="view-mode" type="button" title="맞춤 보기">▤</button>
+          <button class="view-mode active" type="button" disabled title="연속 페이지 보기로 고정됩니다.">▣</button>
+          <button class="view-mode" type="button" disabled title="맞춤 보기는 아직 지원하지 않습니다.">▤</button>
         </section>
       </section>
       <section class="workspace">
         <aside class="activity-rail" aria-label="패널">
           <button class="rail-item active" type="button"><span>▯</span><small>페이지</small></button>
-          <button class="rail-item" type="button"><span>⌑</span><small>북마크</small></button>
-          <button class="rail-item" type="button"><span>☰</span><small>주석</small></button>
-          <button class="rail-item" type="button"><span>▤</span><small>양식</small></button>
-          <button class="rail-item" type="button"><span>⌘</span><small>첨부파일</small></button>
+          <button class="rail-item" type="button" disabled title="북마크 패널은 아직 지원하지 않습니다."><span>⌑</span><small>북마크</small></button>
+          <button class="rail-item" type="button" disabled title="주석 목록 패널은 아직 지원하지 않습니다."><span>☰</span><small>주석</small></button>
+          <button class="rail-item" type="button" disabled title="폼 패널은 아직 지원하지 않습니다."><span>▤</span><small>양식</small></button>
+          <button class="rail-item" type="button" disabled title="첨부파일 패널은 아직 지원하지 않습니다."><span>⌘</span><small>첨부파일</small></button>
         </aside>
         <aside class="sidebar">
           <div class="panel-head">
@@ -186,10 +189,10 @@ function renderApp(): void {
       <footer class="bottom-bar">
         <div></div>
         <section class="bottom-controls" aria-label="페이지 보기">
-          <button class="icon-btn" type="button" title="이전 페이지">‹</button>
-          <span class="page-number-chip">1</span>
+          <button class="icon-btn" id="previousPageButton" type="button" title="이전 페이지">‹</button>
+          <span class="page-number-chip" id="bottomCurrentPage">1</span>
           <span class="status-line">/ <span id="bottomPageCount">0</span></span>
-          <button class="icon-btn" type="button" title="다음 페이지">›</button>
+          <button class="icon-btn" id="nextPageButton" type="button" title="다음 페이지">›</button>
           <span class="toolbar-separator"></span>
           <button class="icon-btn" id="zoomOutFooter" type="button" title="축소">−</button>
           <span class="zoom-chip" data-zoom-label>100%</span>
@@ -226,6 +229,8 @@ function bindStaticEvents(): void {
   byId("zoomInButton").addEventListener("click", () => setZoom(zoom + 0.15));
   byId("zoomOutFooter").addEventListener("click", () => setZoom(zoom - 0.15));
   byId("zoomInFooter").addEventListener("click", () => setZoom(zoom + 0.15));
+  byId("previousPageButton").addEventListener("click", () => goToRelativePage(-1));
+  byId("nextPageButton").addEventListener("click", () => goToRelativePage(1));
 
   dom.fileInput.addEventListener("change", () => {
     const file = dom.fileInput.files?.[0];
@@ -417,6 +422,9 @@ function renderDocumentName(): void {
 
 async function renderWorkspace(): Promise<void> {
   const cycle = ++renderCycle;
+  pageVisibilityObserver?.disconnect();
+  pageVisibilityObserver = null;
+  pageMetricsById = new Map();
   const pageList = byId("pageList");
   const pageCount = byId("pageCount");
   const bottomPageCount = document.querySelector<HTMLElement>("#bottomPageCount");
@@ -445,6 +453,7 @@ async function renderWorkspace(): Promise<void> {
       </div>
     `;
     byId("emptyOpenButton").addEventListener("click", () => dom.fileInput.click());
+    updateCurrentPageIndicators();
     return;
   }
 
@@ -453,69 +462,134 @@ async function renderWorkspace(): Promise<void> {
     bottomPageCount.textContent = `${pageItems.length}`;
   }
   syncZoomLabels();
+  const documentStack = document.createElement("div");
+  documentStack.className = "document-stack";
+  canvasArea.append(documentStack);
   for (let index = 0; index < pageItems.length; index += 1) {
     const item = pageItems[index];
-    const thumbnail = await renderThumbnail(item, index);
+    const thumbnail = renderThumbnail(item, index);
+    pageList.append(thumbnail);
+    const stage = await createPageStage(item, index);
     if (cycle !== renderCycle) {
       return;
     }
-    pageList.append(thumbnail);
+    documentStack.append(stage);
+    if (item.id === currentPageId) {
+      await renderPageStage(stage, item);
+    }
   }
 
   const current = currentPage();
   if (!current) {
     return;
   }
-  const stage = await renderCurrentPage(current);
+  const currentStage = pageStage(current.id);
+  if (currentStage) {
+    await renderPageStage(currentStage, current);
+  }
   if (cycle !== renderCycle) {
     return;
   }
-  canvasArea.append(stage);
+  observePageStages(canvasArea);
+  canvasArea.removeEventListener("scroll", updateCurrentPageFromScroll);
+  canvasArea.addEventListener("scroll", updateCurrentPageFromScroll, { passive: true });
+  if (currentStage && pageItems[0]?.id !== current.id) {
+    currentStage.scrollIntoView({ block: "start" });
+  }
+  updateCurrentPageIndicators();
 }
 
-async function renderThumbnail(item: PageItem, index: number): Promise<HTMLButtonElement> {
+function renderThumbnail(item: PageItem, index: number): HTMLButtonElement {
   const button = document.createElement("button");
   button.type = "button";
   button.className = `thumb${item.id === currentPageId ? " active" : ""}`;
+  button.dataset.pageId = item.id;
   button.addEventListener("click", () => {
     currentPageId = item.id;
     selectedId = null;
-    void renderWorkspace();
+    scrollPageIntoView(item.id);
+    updateCurrentPageIndicators();
     renderInspector();
   });
 
-  const canvas = document.createElement("canvas");
-  const page = await requirePage(item.sourceIndex);
-  const viewport = page.getViewport({ scale: 0.18, rotation: item.rotation });
-  canvas.width = Math.floor(viewport.width);
-  canvas.height = Math.floor(viewport.height);
-  const context = canvas.getContext("2d");
-  if (context) {
-    await page.render({ canvas, canvasContext: context, viewport }).promise;
-  }
+  const placeholder = document.createElement("div");
+  placeholder.className = "thumb-placeholder";
   const pageAnnotations = annotations.filter((ann) => ann.pageId === item.id).length;
-  button.append(canvas);
+  button.append(placeholder);
   button.insertAdjacentHTML(
     "beforeend",
     `<div class="thumb-meta"><span>${index + 1}쪽</span>${pageAnnotations ? `<span class="badge">${pageAnnotations}</span>` : ""}</div>`,
   );
+  void hydrateThumbnail(button, item);
   return button;
 }
 
-async function renderCurrentPage(item: PageItem): Promise<HTMLDivElement> {
+async function hydrateThumbnail(button: HTMLButtonElement, item: PageItem): Promise<void> {
+  try {
+    const page = await requirePage(item.sourceIndex);
+    const viewport = page.getViewport({ scale: 0.18, rotation: item.rotation });
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.floor(viewport.width);
+    canvas.height = Math.floor(viewport.height);
+    const context = canvas.getContext("2d");
+    if (context) {
+      await page.render({ canvas, canvasContext: context, viewport }).promise;
+    }
+    button.querySelector(".thumb-placeholder")?.replaceWith(canvas);
+  } catch (error) {
+    console.warn("thumbnail render failed", error);
+  }
+}
+
+async function createPageStage(item: PageItem, index: number): Promise<HTMLDivElement> {
   const page = await requirePage(item.sourceIndex);
   const viewport = page.getViewport({ scale: zoom, rotation: item.rotation });
-  pageWidth = viewport.width;
-  pageHeight = viewport.height;
+  setPageMetrics(item.id, viewport.width, viewport.height);
 
   const stage = document.createElement("div");
-  stage.className = "page-stage";
+  stage.className = `page-stage${item.id === currentPageId ? " active" : ""}`;
+  stage.dataset.pageId = item.id;
+  stage.dataset.pageNumber = `${index + 1}`;
+  stage.setAttribute("aria-label", `${index + 1}쪽`);
   const shell = document.createElement("div");
   shell.className = "page-shell";
-  shell.style.width = `${pageWidth}px`;
-  shell.style.height = `${pageHeight}px`;
+  shell.style.width = `${viewport.width}px`;
+  shell.style.height = `${viewport.height}px`;
 
   const canvas = document.createElement("canvas");
+  canvas.setAttribute("aria-label", `${index + 1}쪽 PDF 페이지`);
+  canvas.dataset.pending = "true";
+  canvas.style.width = `${viewport.width}px`;
+  canvas.style.height = `${viewport.height}px`;
+  const layer = document.createElement("div");
+  layer.className = "annotation-layer";
+  layer.dataset.pageId = item.id;
+  layer.addEventListener("pointerdown", (event) => handleLayerPointerDown(event, item.id));
+  layer.addEventListener("pointermove", handleLayerPointerMove);
+  layer.addEventListener("pointerup", handleLayerPointerUp);
+  layer.addEventListener("pointercancel", cancelDraft);
+
+  shell.append(canvas, layer);
+  stage.append(shell);
+  return stage;
+}
+
+async function renderPageStage(stage: HTMLDivElement, item: PageItem): Promise<void> {
+  if (stage.dataset.rendered === "true" || stage.dataset.rendering === "true") {
+    return;
+  }
+  stage.dataset.rendering = "true";
+  const page = await requirePage(item.sourceIndex);
+  const viewport = page.getViewport({ scale: zoom, rotation: item.rotation });
+  setPageMetrics(item.id, viewport.width, viewport.height);
+  setActivePageMetrics(item.id);
+
+  const canvas = stage.querySelector<HTMLCanvasElement>("canvas");
+  const layer = stage.querySelector<HTMLElement>(".annotation-layer");
+  if (!canvas || !layer) {
+    delete stage.dataset.rendering;
+    return;
+  }
   const ratio = window.devicePixelRatio || 1;
   canvas.width = Math.floor(pageWidth * ratio);
   canvas.height = Math.floor(pageHeight * ratio);
@@ -527,19 +601,130 @@ async function renderCurrentPage(item: PageItem): Promise<HTMLDivElement> {
     await page.render({ canvas, canvasContext: context, viewport }).promise;
     pageCanvasSnapshots.set(item.id, canvas.toDataURL("image/png"));
   }
-
-  const layer = document.createElement("div");
-  layer.className = "annotation-layer";
-  layer.addEventListener("pointerdown", (event) => handleLayerPointerDown(event, item.id));
-  layer.addEventListener("pointermove", handleLayerPointerMove);
-  layer.addEventListener("pointerup", handleLayerPointerUp);
-  layer.addEventListener("pointercancel", cancelDraft);
-
+  delete canvas.dataset.pending;
   renderLayerContents(layer, item);
+  stage.dataset.rendered = "true";
+  delete stage.dataset.rendering;
+}
 
-  shell.append(canvas, layer);
-  stage.append(shell);
-  return stage;
+function setPageMetrics(pageId: string, width: number, height: number): void {
+  pageMetricsById.set(pageId, { width, height });
+  if (pageId === currentPageId) {
+    pageWidth = width;
+    pageHeight = height;
+  }
+}
+
+function setActivePageMetrics(pageId: string): boolean {
+  const metrics = pageMetricsById.get(pageId);
+  if (!metrics) {
+    return false;
+  }
+  pageWidth = metrics.width;
+  pageHeight = metrics.height;
+  return true;
+}
+
+function pageStage(pageId: string): HTMLDivElement | null {
+  return document.querySelector<HTMLDivElement>(`.page-stage[data-page-id="${pageId}"]`);
+}
+
+function observePageStages(canvasArea: HTMLElement): void {
+  pageVisibilityObserver?.disconnect();
+  pageVisibilityObserver = new IntersectionObserver(
+    (entries) => {
+      for (const entry of entries) {
+        if (!entry.isIntersecting || !(entry.target instanceof HTMLDivElement)) {
+          continue;
+        }
+        const pageId = entry.target.dataset.pageId;
+        const item = pageItems.find((candidate) => candidate.id === pageId);
+        if (item) {
+          void renderPageStage(entry.target, item);
+        }
+      }
+    },
+    {
+      root: canvasArea,
+      rootMargin: "900px 0px",
+      threshold: 0.01,
+    },
+  );
+  document.querySelectorAll<HTMLDivElement>(".page-stage").forEach((stage) => {
+    pageVisibilityObserver?.observe(stage);
+  });
+}
+
+function updateCurrentPageFromScroll(): void {
+  if (Date.now() < pageScrollLockUntil) {
+    return;
+  }
+  const canvasArea = byId("canvasArea");
+  const areaRect = canvasArea.getBoundingClientRect();
+  const anchorY = areaRect.top + areaRect.height * 0.35;
+  let best: { id: string; distance: number } | null = null;
+  const stages = Array.from(document.querySelectorAll<HTMLDivElement>(".page-stage"));
+  for (const stage of stages) {
+    const pageId = stage.dataset.pageId;
+    if (!pageId) {
+      continue;
+    }
+    const rect = stage.getBoundingClientRect();
+    const containsAnchor = rect.top <= anchorY && rect.bottom >= anchorY;
+    const distance = containsAnchor ? 0 : Math.min(Math.abs(rect.top - anchorY), Math.abs(rect.bottom - anchorY));
+    if (!best || distance < best.distance) {
+      best = { id: pageId, distance };
+    }
+  }
+  if (best && best.id !== currentPageId) {
+    currentPageId = best.id;
+    setActivePageMetrics(best.id);
+    updateCurrentPageIndicators();
+    renderInspector();
+  }
+}
+
+function updateCurrentPageIndicators(): void {
+  const currentIndex = pageItems.findIndex((item) => item.id === currentPageId);
+  const displayIndex = currentIndex >= 0 ? currentIndex + 1 : 0;
+  const currentPage = document.querySelector<HTMLElement>("#bottomCurrentPage");
+  if (currentPage) {
+    currentPage.textContent = `${displayIndex}`;
+  }
+  document.querySelectorAll<HTMLDivElement>(".page-stage").forEach((stage) => {
+    stage.classList.toggle("active", stage.dataset.pageId === currentPageId);
+  });
+  document.querySelectorAll<HTMLButtonElement>(".thumb").forEach((thumb) => {
+    thumb.classList.toggle("active", thumb.dataset.pageId === currentPageId);
+  });
+}
+
+function scrollPageIntoView(pageId: string): void {
+  const stage = pageStage(pageId);
+  if (!stage) {
+    return;
+  }
+  pageScrollLockUntil = Date.now() + 600;
+  const canvasArea = byId("canvasArea");
+  canvasArea.scrollTo({ top: Math.max(0, stage.offsetTop - 24), behavior: "auto" });
+  const item = pageItems.find((candidate) => candidate.id === pageId);
+  if (item) {
+    void renderPageStage(stage, item);
+  }
+}
+
+function goToRelativePage(delta: -1 | 1): void {
+  const index = pageItems.findIndex((item) => item.id === currentPageId);
+  const target = clamp(index + delta, 0, Math.max(0, pageItems.length - 1));
+  const item = pageItems[target];
+  if (!item || item.id === currentPageId) {
+    return;
+  }
+  currentPageId = item.id;
+  selectedId = null;
+  scrollPageIntoView(item.id);
+  updateCurrentPageIndicators();
+  renderInspector();
 }
 
 function renderAnnotation(annotation: Annotation): Element {
@@ -685,6 +870,9 @@ function handleLayerPointerDown(event: PointerEvent, pageId: string): void {
   if (!(event.currentTarget instanceof HTMLElement)) {
     return;
   }
+  currentPageId = pageId;
+  setActivePageMetrics(pageId);
+  updateCurrentPageIndicators();
   const point = eventPoint(event, event.currentTarget);
 
   if (pendingImageDataUrl) {
@@ -743,6 +931,9 @@ function renderSourceTextItem(item: SourceTextItem): HTMLButtonElement {
       return;
     }
     event.stopPropagation();
+    currentPageId = item.pageId;
+    setActivePageMetrics(item.pageId);
+    updateCurrentPageIndicators();
     convertSourceTextToAnnotation(item);
   });
   return button;
@@ -763,40 +954,53 @@ function renderSourceImageItem(item: SourceImageItem): HTMLButtonElement {
       return;
     }
     event.stopPropagation();
+    currentPageId = item.pageId;
+    setActivePageMetrics(item.pageId);
+    updateCurrentPageIndicators();
     convertSourceImageToRedaction(item);
   });
   return button;
 }
 
 function renderCurrentLayer(): void {
-  const item = currentPage();
-  const layer = document.querySelector<HTMLElement>(".annotation-layer");
-  if (!item || !layer) {
-    return;
+  document.querySelectorAll<HTMLElement>(".annotation-layer").forEach((layer) => {
+    const pageId = layer.dataset.pageId;
+    const item = pageItems.find((candidate) => candidate.id === pageId);
+    if (!pageId || !item || !setActivePageMetrics(pageId)) {
+      return;
+    }
+    renderLayerContents(layer, item);
+  });
+  if (currentPageId) {
+    setActivePageMetrics(currentPageId);
   }
-  renderLayerContents(layer, item);
 }
 
 function refreshFlowEffects(): void {
-  const item = currentPage();
-  const layer = document.querySelector<HTMLElement>(".annotation-layer");
-  if (!item || !layer) {
-    return;
+  document.querySelectorAll<HTMLElement>(".annotation-layer").forEach((layer) => {
+    const pageId = layer.dataset.pageId;
+    const item = pageItems.find((candidate) => candidate.id === pageId);
+    if (!pageId || !item || !setActivePageMetrics(pageId)) {
+      return;
+    }
+    layer.querySelectorAll(".source-mask, .source-text, .source-image, .flow-slice").forEach((node) => node.remove());
+    const flowSlices = pageFlowSlicesForPage(item.id);
+    const flowNodes = [
+      ...sourceMasksForPage(item.id).map(renderSourceMask),
+      ...flowSlices.map(renderPageFlowSlice),
+      ...(flowSlices.length > 0 ? [] : flowedSourceTextsForPage(item.id).map(renderFlowedSourceText)),
+      ...(sourceImageItemsByPage.get(item.id) ?? [])
+        .filter((sourceImage) => !isSourceImageAlreadyEdited(sourceImage.id))
+        .map(renderSourceImageItem),
+      ...(sourceTextItemsByPage.get(item.id) ?? [])
+        .filter((sourceText) => !isSourceTextAlreadyEdited(sourceText.id) && sourceTextFlowOffset(sourceText) === 0)
+        .map(renderSourceTextItem),
+    ];
+    layer.prepend(...flowNodes);
+  });
+  if (currentPageId) {
+    setActivePageMetrics(currentPageId);
   }
-  layer.querySelectorAll(".source-mask, .source-text, .source-image, .flow-slice").forEach((node) => node.remove());
-  const flowSlices = pageFlowSlicesForPage(item.id);
-  const flowNodes = [
-    ...sourceMasksForPage(item.id).map(renderSourceMask),
-    ...flowSlices.map(renderPageFlowSlice),
-    ...(flowSlices.length > 0 ? [] : flowedSourceTextsForPage(item.id).map(renderFlowedSourceText)),
-    ...(sourceImageItemsByPage.get(item.id) ?? [])
-      .filter((sourceImage) => !isSourceImageAlreadyEdited(sourceImage.id))
-      .map(renderSourceImageItem),
-    ...(sourceTextItemsByPage.get(item.id) ?? [])
-      .filter((sourceText) => !isSourceTextAlreadyEdited(sourceText.id) && sourceTextFlowOffset(sourceText) === 0)
-      .map(renderSourceTextItem),
-  ];
-  layer.prepend(...flowNodes);
 }
 
 function syncInspectorValues(annotation: Annotation): void {
@@ -901,6 +1105,9 @@ function renderFlowedSourceText(flowedText: FlowedSourceText): HTMLButtonElement
       return;
     }
     event.stopPropagation();
+    currentPageId = item.pageId;
+    setActivePageMetrics(item.pageId);
+    updateCurrentPageIndicators();
     convertSourceTextToAnnotation(item);
   });
   return button;
@@ -1797,6 +2004,9 @@ function handleAnnotationPointerDown(event: PointerEvent, annotation: Annotation
     return;
   }
   event.stopPropagation();
+  currentPageId = annotation.pageId;
+  setActivePageMetrics(annotation.pageId);
+  updateCurrentPageIndicators();
   selectedId = annotation.id;
   dragState = {
     id: annotation.id,
@@ -1811,6 +2021,9 @@ function handleAnnotationPointerDown(event: PointerEvent, annotation: Annotation
 
 function handleResizePointerDown(event: PointerEvent, annotation: Annotation): void {
   event.stopPropagation();
+  currentPageId = annotation.pageId;
+  setActivePageMetrics(annotation.pageId);
+  updateCurrentPageIndicators();
   selectedId = annotation.id;
   dragState = {
     id: annotation.id,
@@ -1829,6 +2042,7 @@ function updateDrag(event: PointerEvent): void {
   if (!annotation) {
     return;
   }
+  setActivePageMetrics(annotation.pageId);
   const deltaX = (event.clientX - dragState.startX) / pageWidth;
   const deltaY = (event.clientY - dragState.startY) / pageHeight;
 
@@ -1868,6 +2082,10 @@ function renderInspector(): void {
 
   const currentIndex = pageItems.findIndex((item) => item.id === currentPageId);
   const documentControls = documentFields();
+  const layoutWarnings = layoutCollisionWarnings();
+  const warningPanel = layoutWarnings.length
+    ? `<div class="warning-panel"><strong>저장 차단됨</strong><span>${escapeHtml(layoutWarnings[0])}</span></div>`
+    : "";
   const pageControls = `
     <div class="field">
       <label>현재 페이지</label>
@@ -1886,8 +2104,9 @@ function renderInspector(): void {
   if (!selected) {
     body.innerHTML = `
       ${documentControls}
+      ${warningPanel}
       ${pageControls}
-      <p class="status-line">기존 글씨를 클릭하면 Acrobat처럼 내용과 글씨 크기를 바로 편집할 수 있습니다. 새 글씨는 텍스트 도구로 추가하세요.</p>
+      <p class="status-line">기존 글씨는 안전 교체 방식으로 편집합니다. 문단 재흐름은 이미지/도표 충돌 검증을 통과해야 저장됩니다.</p>
     `;
     bindDocumentControls();
     bindPageControls();
@@ -1896,6 +2115,7 @@ function renderInspector(): void {
 
   body.innerHTML = `
     ${documentControls}
+    ${warningPanel}
     ${pageControls}
     ${selected.type === "text" ? textFields(selected) : ""}
     ${selected.type === "formField" ? formFieldFields(selected) : ""}
@@ -2390,9 +2610,112 @@ async function searchPdf(query: string): Promise<void> {
   showToast("검색 결과가 없습니다.");
 }
 
+function layoutCollisionWarnings(): string[] {
+  const warnings: string[] = [];
+  const textRects = editableFlowTextRects();
+  for (const textRect of textRects) {
+    if (textRect.y + textRect.height > 0.99) {
+      warnings.push(`${textRect.label} 텍스트가 페이지 하단을 넘습니다.`);
+      continue;
+    }
+    for (const image of sourceImageItemsByPage.get(textRect.pageId) ?? []) {
+      if (isSourceImageAlreadyEdited(image.id)) {
+        continue;
+      }
+      const overlap = normalizedOverlapAreaRatio(textRect, image);
+      const baselineOverlap = normalizedOverlapAreaRatio(
+        {
+          x: textRect.baselineX,
+          y: textRect.baselineY,
+          width: textRect.baselineWidth,
+          height: textRect.baselineHeight,
+        },
+        image,
+      );
+      if (overlap > 0.01 && overlap > baselineOverlap + 0.01) {
+        warnings.push(`${textRect.label} 텍스트가 이미지/도표 영역과 겹칩니다.`);
+        break;
+      }
+    }
+  }
+  return warnings;
+}
+
+function editableFlowTextRects(): Array<{
+  pageId: string;
+  label: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  baselineX: number;
+  baselineY: number;
+  baselineWidth: number;
+  baselineHeight: number;
+}> {
+  const rects = annotations
+    .filter((annotation): annotation is TextAnnotation => annotation.type === "text")
+    .filter((annotation) => Boolean(annotation.sourceTextId || annotation.reflowable))
+    .map((annotation) => ({
+      pageId: annotation.pageId,
+      label: annotation.sourceTextId ? "기존 글씨 편집" : "문단 재흐름",
+      x: annotation.x,
+      y: annotation.y,
+      width: annotation.width,
+      height: annotation.height,
+      baselineX: annotation.eraseOriginal?.x ?? annotation.x,
+      baselineY: annotation.eraseOriginal?.y ?? annotation.y,
+      baselineWidth: annotation.eraseOriginal?.width ?? annotation.width,
+      baselineHeight: annotation.eraseOriginal?.height ?? annotation.height,
+    }));
+
+  for (const [pageId, items] of sourceTextItemsByPage.entries()) {
+    for (const item of items) {
+      if (isSourceTextAlreadyEdited(item.id)) {
+        continue;
+      }
+      const offset = sourceTextFlowOffset(item);
+      if (Math.abs(offset) < 0.05) {
+        continue;
+      }
+      rects.push({
+        pageId,
+        label: "연쇄 재배치",
+        x: item.x,
+        y: clamp(item.y + offset, 0, 1 - item.height),
+        width: item.width,
+        height: item.height,
+        baselineX: item.x,
+        baselineY: item.y,
+        baselineWidth: item.width,
+        baselineHeight: item.height,
+      });
+    }
+  }
+
+  return rects;
+}
+
+function normalizedOverlapAreaRatio(
+  left: { x: number; y: number; width: number; height: number },
+  right: { x: number; y: number; width: number; height: number },
+): number {
+  const xOverlap = Math.max(0, Math.min(left.x + left.width, right.x + right.width) - Math.max(left.x, right.x));
+  const yOverlap = Math.max(0, Math.min(left.y + left.height, right.y + right.height) - Math.max(left.y, right.y));
+  if (xOverlap <= 0 || yOverlap <= 0) {
+    return 0;
+  }
+  return (xOverlap * yOverlap) / Math.max(0.0001, left.width * left.height);
+}
+
 async function exportPdf(): Promise<void> {
   if (!originalBytes || !pdfDocument) {
     showToast("먼저 PDF를 열어주세요.");
+    return;
+  }
+  const layoutWarnings = layoutCollisionWarnings();
+  if (layoutWarnings.length > 0) {
+    showToast(`레이아웃 충돌: ${layoutWarnings[0]}`);
     return;
   }
 
@@ -2414,6 +2737,10 @@ async function exportPdf(): Promise<void> {
 async function buildExportPdfBytes(): Promise<Uint8Array> {
   if (!originalBytes || !pdfDocument) {
     throw new Error("PDF is not loaded.");
+  }
+  const layoutWarnings = layoutCollisionWarnings();
+  if (layoutWarnings.length > 0) {
+    throw new Error(`레이아웃 충돌: ${layoutWarnings[0]}`);
   }
 
   const engineBytes = await tryExportWithEngine();

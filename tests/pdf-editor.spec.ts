@@ -60,6 +60,38 @@ async function createCrossPageFlowPdf(filePath: string): Promise<void> {
   await fs.writeFile(filePath, await document.save());
 }
 
+async function createImageCollisionPdf(filePath: string): Promise<void> {
+  await fs.mkdir(path.dirname(filePath), { recursive: true });
+  const document = await PDFDocument.create();
+  const page = document.addPage([612, 792]);
+  const font = await document.embedFont(StandardFonts.Helvetica);
+  const pngBytes = Buffer.from(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADUlEQVR4nGP8z8BQDwAFgwJ/lrW9NwAAAABJRU5ErkJggg==",
+    "base64",
+  );
+  const image = await document.embedPng(pngBytes);
+  page.drawText("Figure collision lead paragraph", {
+    x: 72,
+    y: 724,
+    size: 16,
+    font,
+    color: rgb(0.1, 0.12, 0.15),
+  });
+  page.drawImage(image, {
+    x: 72,
+    y: 420,
+    width: 260,
+    height: 190,
+  });
+  page.drawText("Figure 1. Protected image area", {
+    x: 72,
+    y: 398,
+    size: 11,
+    font,
+  });
+  await fs.writeFile(filePath, await document.save());
+}
+
 function runPython(script: string, args: string[] = []): Promise<string> {
   return new Promise((resolve, reject) => {
     const child = spawn("python3", ["-c", script, ...args], {
@@ -294,6 +326,46 @@ test("cascades text reflow to following pages and clears selection with Escape",
   await expect(page.locator(".flowed-source-text", {
     hasText: "Following page paragraph should move with document reflow",
   })).toBeVisible();
+});
+
+test("uses a continuous document viewer and thumbnail scrolling", async ({ page }) => {
+  const samplePath = path.resolve("tmp/sample-continuous-viewer.pdf");
+  await createCrossPageFlowPdf(samplePath);
+
+  await page.goto("http://127.0.0.1:5173/");
+  await page
+    .locator('input[type="file"][accept="application/pdf"]')
+    .setInputFiles(samplePath);
+
+  await expect(page.locator(".page-stage")).toHaveCount(2);
+  await expect(page.locator(".page-stage[data-page-number='1']")).toBeAttached();
+  await expect(page.locator(".page-stage[data-page-number='2']")).toBeAttached();
+  expect(await page.locator(".menu-bar button:enabled").allTextContents()).toEqual(["파일"]);
+  await expect(page.locator(".rail-item:enabled")).toHaveCount(1);
+
+  await page.locator(".thumb").nth(1).click();
+  await expect(page.locator(".page-stage.active")).toHaveAttribute("data-page-number", "2");
+  await expect(page.locator("#bottomCurrentPage")).toHaveText("2");
+  await expect(page.locator(".page-stage")).toHaveCount(2);
+});
+
+test("blocks source text export when reflow collides with images", async ({ page }) => {
+  const samplePath = path.resolve("tmp/sample-image-collision.pdf");
+  await createImageCollisionPdf(samplePath);
+
+  await page.goto("http://127.0.0.1:5173/");
+  await page
+    .locator('input[type="file"][accept="application/pdf"]')
+    .setInputFiles(samplePath);
+  await expect(page.locator(".source-image").first()).toBeVisible();
+
+  await page.locator(".source-text", { hasText: "Figure collision lead paragraph" }).click();
+  await page.locator(".annotation.text textarea").fill("이미지 영역과 겹치면 저장되면 안 되는 문단입니다. ".repeat(20));
+  await page.locator("#fontSize").fill("48");
+  await page.locator("#fontSize").press("Enter");
+
+  await page.getByRole("button", { name: "PDF 내보내기" }).click();
+  await expect(page.locator("#toast")).toContainText("레이아웃 충돌");
 });
 
 test("edits and exports the repository ex.pdf without losing page structure", async ({
