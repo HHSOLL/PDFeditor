@@ -51,6 +51,8 @@ class Operation(TypedDict, total=False):
     dataUrl: str
     fontFamily: str
     fontName: str
+    sourceAnnotationId: str
+    annotationSubtype: str
 
 
 class SaveOptions(TypedDict, total=False):
@@ -201,6 +203,7 @@ def apply_operations(
         for page_index, page_operations in operations_by_page.items():
             page = output[page_index]
             metrics = PageMetrics(page.rect.width, page.rect.height)
+            apply_annotation_delete_phase(page, page_operations, metrics)
             flow_slice_images = render_flow_slice_images(page, page_operations, metrics)
             apply_redaction_phase(page, page_operations, metrics, save_options)
             apply_insert_phase(page, page_operations, metrics, font_path, flow_slice_images, save_options)
@@ -285,7 +288,7 @@ def validate_operations(value: Any, page_count: int) -> list[Operation]:
         page_index = int(raw.get("pageIndex", -1))
         if page_index < 0 or page_index >= page_count:
             continue
-        if op_type not in {"text", "highlight", "rect", "redact", "pen", "image", "flowSlice"}:
+        if op_type not in {"text", "highlight", "rect", "redact", "pen", "image", "flowSlice", "deleteAnnotation"}:
             continue
         operation: Operation = dict(raw)  # type: ignore[assignment]
         operation["type"] = op_type
@@ -299,6 +302,63 @@ def group_operations(operations: Iterable[Operation]) -> dict[int, list[Operatio
     for operation in operations:
         grouped.setdefault(int(operation["pageIndex"]), []).append(operation)
     return grouped
+
+
+def apply_annotation_delete_phase(
+    page: fitz.Page,
+    operations: list[Operation],
+    metrics: PageMetrics,
+) -> None:
+    delete_operations = [operation for operation in operations if operation["type"] == "deleteAnnotation"]
+    if not delete_operations:
+        return
+    for operation in delete_operations:
+        target_rect = to_rect(operation, metrics)
+        subtype = str(operation.get("annotationSubtype", ""))
+        source_id = str(operation.get("sourceAnnotationId", ""))
+        for annotation in list(page.annots() or []):
+            if annotation_matches_delete_operation(annotation, target_rect, subtype, source_id):
+                page.delete_annot(annotation)
+                break
+
+
+def annotation_matches_delete_operation(
+    annotation: fitz.Annot,
+    target_rect: fitz.Rect,
+    subtype: str,
+    source_id: str,
+) -> bool:
+    if source_id and source_id in {str(annotation.xref), f"{annotation.xref}R"}:
+        return True
+    if subtype and not annotation_subtype_matches(annotation, subtype):
+        return False
+    return rects_match(annotation.rect, target_rect)
+
+
+def annotation_subtype_matches(annotation: fitz.Annot, subtype: str) -> bool:
+    annotation_type = annotation.type[1] if len(annotation.type) > 1 else ""
+    if annotation_type == subtype:
+        return True
+    aliases = {
+        "rect": {"Square"},
+        "highlight": {"Highlight", "Underline", "StrikeOut", "Squiggly"},
+        "text": {"FreeText"},
+        "pen": {"Ink"},
+    }
+    return annotation_type in aliases.get(subtype, set())
+
+
+def rects_match(left: fitz.Rect, right: fitz.Rect) -> bool:
+    intersection = left & right
+    if intersection.is_empty:
+        return False
+    left_area = max(1.0, left.get_area())
+    right_area = max(1.0, right.get_area())
+    overlap = intersection.get_area() / min(left_area, right_area)
+    if overlap >= 0.35:
+        return True
+    left_center = fitz.Point((left.x0 + left.x1) / 2, (left.y0 + left.y1) / 2)
+    return right.contains(left_center)
 
 
 def apply_redaction_phase(
@@ -363,6 +423,8 @@ def apply_insert_phase(
     native_annotations = save_options.get("annotationMode") == "native"
     for operation in operations:
         op_type = operation["type"]
+        if op_type == "deleteAnnotation":
+            continue
         if native_annotations and is_native_annotation_candidate(operation, font_path):
             insert_native_annotation(page, operation, metrics, font_path)
             continue

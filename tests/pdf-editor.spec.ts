@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
@@ -29,6 +30,59 @@ async function createSamplePdf(filePath: string): Promise<void> {
   });
   page.drawText("Amount: $1,200", { x: 72, y: 610, size: 14, font });
   await fs.writeFile(filePath, await document.save());
+}
+
+function runPython(script: string, args: string[] = []): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const child = spawn("python3", ["-c", script, ...args], {
+      cwd: process.cwd(),
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    const stdout: Buffer[] = [];
+    const stderr: Buffer[] = [];
+    child.stdout.on("data", (chunk: Buffer) => stdout.push(chunk));
+    child.stderr.on("data", (chunk: Buffer) => stderr.push(chunk));
+    child.on("error", reject);
+    child.on("close", (code) => {
+      if (code !== 0) {
+        reject(new Error(`python3 exited ${code}: ${Buffer.concat(stderr).toString("utf8")}`));
+        return;
+      }
+      resolve(Buffer.concat(stdout).toString("utf8"));
+    });
+  });
+}
+
+async function createExistingAnnotationPdf(filePath: string): Promise<void> {
+  await fs.mkdir(path.dirname(filePath), { recursive: true });
+  await runPython(
+    [
+      "import fitz, sys",
+      "doc = fitz.open()",
+      "page = doc.new_page(width=612, height=792)",
+      "page.insert_text((72, 92), 'Existing annotation page', fontsize=16)",
+      "annot = page.add_rect_annot(fitz.Rect(72, 120, 200, 188))",
+      "annot.set_info(content='legacy square annotation')",
+      "annot.set_colors(stroke=(1, 0, 0))",
+      "annot.update()",
+      "doc.save(sys.argv[1])",
+      "doc.close()",
+    ].join("\n"),
+    [filePath],
+  );
+}
+
+async function annotationCount(filePath: string): Promise<number> {
+  const stdout = await runPython(
+    [
+      "import fitz, sys",
+      "doc = fitz.open(sys.argv[1])",
+      "print(len(list(doc[0].annots() or [])))",
+      "doc.close()",
+    ].join("\n"),
+    [filePath],
+  );
+  return Number(stdout.trim());
 }
 
 test("selects multi-line PDF text as one editable paragraph without repainting the canvas", async ({
@@ -154,6 +208,33 @@ test("saves metadata and duplicated pages through the advanced save pipeline", a
   expect(exported.getPageCount()).toBe(2);
   expect(exported.getTitle()).toBe("Advanced PDF Studio Export");
   expect(exported.getAuthor()).toBe("HHSOLL");
+});
+
+test("imports existing PDF annotations and exports real annotation deletion", async ({
+  page,
+}) => {
+  const samplePath = path.resolve("tmp/sample-existing-annotation.pdf");
+  const exportedPath = path.resolve("tmp/exported-existing-annotation.pdf");
+  await createExistingAnnotationPdf(samplePath);
+  expect(await annotationCount(samplePath)).toBe(1);
+
+  await page.goto("http://127.0.0.1:5173/");
+  await page
+    .locator('input[type="file"][accept="application/pdf"]')
+    .setInputFiles(samplePath);
+
+  const importedAnnotation = page.locator(".annotation.rect").first();
+  await expect(importedAnnotation).toBeVisible();
+  await importedAnnotation.click();
+  await page.locator("#deleteSelected").click();
+  await expect(page.locator(".annotation.rect")).toHaveCount(0);
+
+  const downloadPromise = page.waitForEvent("download");
+  await page.getByRole("button", { name: "PDF 내보내기" }).click();
+  const download = await downloadPromise;
+  await download.saveAs(exportedPath);
+
+  expect(await annotationCount(exportedPath)).toBe(0);
 });
 
 test("blocks engine-required export when the PDF engine is unavailable", async ({ page }) => {

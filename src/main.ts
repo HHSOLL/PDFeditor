@@ -37,6 +37,7 @@ import type {
   RedactionMode,
   SaveMode,
   Snapshot,
+  SourceAnnotationRef,
   SourceMask,
   SourceTextItem,
   TextAnnotation,
@@ -53,6 +54,7 @@ let pdfDocument: pdfjs.PDFDocumentProxy | null = null;
 let fileName = "edited.pdf";
 let pageItems: PageItem[] = [];
 let annotations: Annotation[] = [];
+let deletedSourceAnnotations: SourceAnnotationRef[] = [];
 let sourceTextItemsByPage = new Map<string, SourceTextItem[]>();
 let pageCanvasSnapshots = new Map<string, string>();
 let documentMetadata: DocumentMetadata = emptyMetadata();
@@ -86,6 +88,15 @@ const dom = {
   fileInput: document.createElement("input"),
   imageInput: document.createElement("input"),
 };
+
+type PdfPageViewport = {
+  width: number;
+  height: number;
+  convertToViewportRectangle(rect: [number, number, number, number]): number[];
+  convertToViewportPoint(x: number, y: number): number[];
+};
+
+type NormalizedRect = Pick<SourceAnnotationRef, "x" | "y" | "width" | "height">;
 
 function renderApp(): void {
   appRoot.innerHTML = `
@@ -258,6 +269,7 @@ async function loadPdf(file: File): Promise<void> {
     rotation: 0,
   }));
   annotations = [];
+  deletedSourceAnnotations = [];
   sourceTextItemsByPage = new Map();
   pageCanvasSnapshots = new Map();
   documentMetadata = await readDocumentMetadata(pdfDocument);
@@ -266,6 +278,7 @@ async function loadPdf(file: File): Promise<void> {
   selectedId = null;
   currentPageId = pageItems[0]?.id ?? null;
   await cacheSourceTextItems();
+  await importExistingAnnotations();
   undoStack = [makeSnapshot()];
   redoStack = [];
   renderDocumentName();
@@ -490,6 +503,7 @@ function renderAnnotation(annotation: Annotation): Element {
       textarea.addEventListener("pointerdown", (event) => event.stopPropagation());
       textarea.addEventListener("input", () => {
         annotation.text = textarea.value;
+        markAnnotationDirty(annotation);
         autoFitText(annotation);
         node.style.height = `${annotation.height * pageHeight}px`;
         textarea.style.height = "100%";
@@ -1016,6 +1030,181 @@ async function cacheSourceTextItems(): Promise<void> {
   }
 }
 
+async function importExistingAnnotations(): Promise<void> {
+  if (!pdfDocument) {
+    return;
+  }
+
+  const imported: Annotation[] = [];
+  for (const pageItem of pageItems) {
+    const page = await requirePage(pageItem.sourceIndex);
+    const viewport = page.getViewport({ scale: 1, rotation: pageItem.rotation });
+    const rawAnnotations = await page.getAnnotations({ intent: "display" });
+    rawAnnotations.forEach((rawAnnotation: unknown, index: number) => {
+      const annotation = convertPdfAnnotation(rawAnnotation, pageItem.id, viewport, index);
+      if (annotation) {
+        imported.push(annotation);
+      }
+    });
+  }
+  annotations.push(...imported);
+}
+
+function convertPdfAnnotation(
+  rawAnnotation: unknown,
+  pageId: string,
+  viewport: PdfPageViewport,
+  index: number,
+): Annotation | null {
+  if (typeof rawAnnotation !== "object" || rawAnnotation === null) {
+    return null;
+  }
+  const raw = rawAnnotation as Record<string, unknown>;
+  const subtype = String(raw.subtype ?? "");
+  const rect = annotationRect(raw.rect, viewport);
+  if (!rect) {
+    return null;
+  }
+  const sourceAnnotationId = String(raw.id ?? `${pageId}:annotation-${index}`);
+  const base = {
+    id: crypto.randomUUID(),
+    pageId,
+    x: rect.x,
+    y: rect.y,
+    width: rect.width,
+    height: rect.height,
+    color: annotationColor(raw.color, subtype),
+    opacity: 0.45,
+    strokeWidth: annotationStrokeWidth(raw.borderStyle),
+    sourceAnnotationId,
+    sourceAnnotationSubtype: subtype,
+    dirty: false,
+  };
+
+  if (subtype === "FreeText") {
+    return {
+      ...base,
+      type: "text",
+      text: annotationText(raw),
+      fontSize: 14,
+      fontFamily: defaultEditorFontFamily(),
+      reflowable: false,
+    };
+  }
+
+  if (subtype === "Highlight" || subtype === "Underline" || subtype === "StrikeOut" || subtype === "Squiggly") {
+    return {
+      ...base,
+      type: "highlight",
+      opacity: 0.35,
+    };
+  }
+
+  if (subtype === "Square") {
+    return {
+      ...base,
+      type: "rect",
+      opacity: 1,
+    };
+  }
+
+  if (subtype === "Ink") {
+    const points = annotationInkPoints(raw.inkLists, viewport);
+    if (points.length < 2) {
+      return null;
+    }
+    return {
+      ...base,
+      type: "pen",
+      points,
+      opacity: 1,
+    };
+  }
+
+  return null;
+}
+
+function annotationRect(rawRect: unknown, viewport: PdfPageViewport): NormalizedRect | null {
+  if (!Array.isArray(rawRect) || rawRect.length !== 4 || rawRect.some((value) => typeof value !== "number")) {
+    return null;
+  }
+  const converted = viewport.convertToViewportRectangle(rawRect as [number, number, number, number]);
+  const left = Math.min(converted[0], converted[2]);
+  const top = Math.min(converted[1], converted[3]);
+  const right = Math.max(converted[0], converted[2]);
+  const bottom = Math.max(converted[1], converted[3]);
+  return {
+    x: clamp(left / viewport.width, 0, 1),
+    y: clamp(top / viewport.height, 0, 1),
+    width: clamp((right - left) / viewport.width, 0.005, 1),
+    height: clamp((bottom - top) / viewport.height, 0.005, 1),
+  };
+}
+
+function annotationText(raw: Record<string, unknown>): string {
+  for (const key of ["contents", "fieldValue", "title"]) {
+    const value = raw[key];
+    if (typeof value === "string" && value.trim()) {
+      return value;
+    }
+  }
+  return "";
+}
+
+function annotationColor(value: unknown, subtype: string): string {
+  if (Array.isArray(value) && value.length >= 3 && value.every((entry) => typeof entry === "number")) {
+    return `#${value.slice(0, 3).map((entry) => clamp(Math.round(Number(entry)), 0, 255).toString(16).padStart(2, "0")).join("")}`;
+  }
+  if (ArrayBuffer.isView(value) && typeof (value as { length?: unknown }).length === "number") {
+    const channels = Array.from(value as unknown as ArrayLike<number>);
+    if (channels.length < 3) {
+      return subtype === "Highlight" ? "#ffe45c" : "#176b58";
+    }
+    return `#${channels
+      .slice(0, 3)
+      .map((entry) => clamp(Math.round(Number(entry)), 0, 255).toString(16).padStart(2, "0"))
+      .join("")}`;
+  }
+  if (subtype === "Highlight") {
+    return "#ffe45c";
+  }
+  return "#176b58";
+}
+
+function annotationStrokeWidth(value: unknown): number {
+  if (typeof value === "object" && value !== null) {
+    const width = (value as { width?: unknown }).width;
+    if (typeof width === "number" && Number.isFinite(width)) {
+      return clamp(width, 1, 12);
+    }
+  }
+  return 2;
+}
+
+function annotationInkPoints(value: unknown, viewport: PdfPageViewport): Point[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  const firstPath = value.find((entry) => Array.isArray(entry));
+  if (!Array.isArray(firstPath)) {
+    return [];
+  }
+  const points: Point[] = [];
+  for (const rawPoint of firstPath) {
+    if (Array.isArray(rawPoint) && rawPoint.length >= 2) {
+      const [x, y] = viewport.convertToViewportPoint(Number(rawPoint[0]), Number(rawPoint[1]));
+      points.push({ x: clamp(x / viewport.width, 0, 1), y: clamp(y / viewport.height, 0, 1) });
+    } else if (typeof rawPoint === "object" && rawPoint !== null) {
+      const candidate = rawPoint as { x?: unknown; y?: unknown };
+      if (typeof candidate.x === "number" && typeof candidate.y === "number") {
+        const [x, y] = viewport.convertToViewportPoint(candidate.x, candidate.y);
+        points.push({ x: clamp(x / viewport.width, 0, 1), y: clamp(y / viewport.height, 0, 1) });
+      }
+    }
+  }
+  return points;
+}
+
 function mergeTextItemsIntoBlocks(items: SourceTextItem[]): SourceTextItem[] {
   const lines = mergeTextItemsIntoLines(items);
   return mergeLinesIntoBlocks(lines);
@@ -1358,6 +1547,7 @@ function updateDrag(event: PointerEvent): void {
     annotation.width = clamp(dragState.original.width + deltaX, 0.02, 1 - annotation.x);
     annotation.height = clamp(dragState.original.height + deltaY, 0.02, 1 - annotation.y);
   }
+  markAnnotationDirty(annotation);
   renderCurrentLayer();
 }
 
@@ -1581,6 +1771,7 @@ function bindInspectorFields(annotation: Annotation): void {
     const input = byId<HTMLInputElement>(id);
     input.addEventListener("change", () => {
       update(Number(input.value));
+      markAnnotationDirty(annotation);
       commitHistory();
       renderInspector();
       renderCurrentLayer();
@@ -1598,6 +1789,7 @@ function bindInspectorFields(annotation: Annotation): void {
   textValue?.addEventListener("change", () => {
     if (annotation.type === "text") {
       annotation.text = textValue.value;
+      markAnnotationDirty(annotation);
       autoFitText(annotation);
       commitHistory();
       renderInspector();
@@ -1609,6 +1801,7 @@ function bindInspectorFields(annotation: Annotation): void {
   fontSize?.addEventListener("change", () => {
     if (annotation.type === "text") {
       annotation.fontSize = clamp(Number(fontSize.value), 8, 96);
+      markAnnotationDirty(annotation);
       autoFitText(annotation);
       commitHistory();
       renderInspector();
@@ -1619,6 +1812,7 @@ function bindInspectorFields(annotation: Annotation): void {
   const colorValue = document.querySelector<HTMLInputElement>("#colorValue");
   colorValue?.addEventListener("input", () => {
     annotation.color = colorValue.value;
+    markAnnotationDirty(annotation);
     renderCurrentLayer();
   });
   colorValue?.addEventListener("change", commitHistory);
@@ -1626,6 +1820,7 @@ function bindInspectorFields(annotation: Annotation): void {
   const opacityValue = document.querySelector<HTMLInputElement>("#opacityValue");
   opacityValue?.addEventListener("input", () => {
     annotation.opacity = Number(opacityValue.value);
+    markAnnotationDirty(annotation);
     renderCurrentLayer();
   });
   opacityValue?.addEventListener("change", commitHistory);
@@ -1633,6 +1828,7 @@ function bindInspectorFields(annotation: Annotation): void {
   const strokeWidth = document.querySelector<HTMLInputElement>("#strokeWidth");
   strokeWidth?.addEventListener("input", () => {
     annotation.strokeWidth = Number(strokeWidth.value);
+    markAnnotationDirty(annotation);
     renderCurrentLayer();
   });
   strokeWidth?.addEventListener("change", commitHistory);
@@ -1640,6 +1836,7 @@ function bindInspectorFields(annotation: Annotation): void {
   const boxWidth = document.querySelector<HTMLInputElement>("#boxWidth");
   boxWidth?.addEventListener("change", () => {
     annotation.width = clamp(Number(boxWidth.value) / 100, 0.02, 1 - annotation.x);
+    markAnnotationDirty(annotation);
     if (annotation.type === "text") {
       autoFitText(annotation);
     }
@@ -1650,6 +1847,7 @@ function bindInspectorFields(annotation: Annotation): void {
   const boxHeight = document.querySelector<HTMLInputElement>("#boxHeight");
   boxHeight?.addEventListener("change", () => {
     annotation.height = clamp(Number(boxHeight.value) / 100, 0.02, 1 - annotation.y);
+    markAnnotationDirty(annotation);
     commitHistory();
     renderInspector();
     renderCurrentLayer();
@@ -1718,6 +1916,9 @@ function duplicateCurrentPage(): void {
         delete cloned.eraseOriginal;
         cloned.reflowable = false;
       }
+      delete cloned.sourceAnnotationId;
+      delete cloned.sourceAnnotationSubtype;
+      cloned.dirty = true;
       return cloned;
     });
   annotations.push(...copiedAnnotations);
@@ -1767,6 +1968,9 @@ function duplicateSelected(): void {
     delete copy.sourceTextId;
     delete copy.eraseOriginal;
   }
+  delete copy.sourceAnnotationId;
+  delete copy.sourceAnnotationSubtype;
+  copy.dirty = true;
   copy.x = clamp(copy.x + 0.02, 0, 1 - copy.width);
   copy.y = clamp(copy.y + 0.02, 0, 1 - copy.height);
   annotations.push(copy);
@@ -1780,11 +1984,33 @@ function deleteSelected(): void {
   if (!selectedId) {
     return;
   }
+  const selected = selectedAnnotation();
+  if (selected?.sourceAnnotationId) {
+    deletedSourceAnnotations.push(sourceAnnotationRef(selected));
+  }
   annotations = annotations.filter((annotation) => annotation.id !== selectedId);
   selectedId = null;
   commitHistory();
   renderInspector();
   renderCurrentLayer();
+}
+
+function markAnnotationDirty(annotation: Annotation): void {
+  if (annotation.sourceAnnotationId) {
+    annotation.dirty = true;
+  }
+}
+
+function sourceAnnotationRef(annotation: Annotation): SourceAnnotationRef {
+  return {
+    sourceAnnotationId: annotation.sourceAnnotationId ?? "",
+    pageId: annotation.pageId,
+    subtype: annotation.sourceAnnotationSubtype ?? annotation.type,
+    x: annotation.x,
+    y: annotation.y,
+    width: annotation.width,
+    height: annotation.height,
+  };
 }
 
 async function searchPdf(query: string): Promise<void> {
@@ -1877,7 +2103,11 @@ function requiresPdfEngineForSafeExport(): boolean {
   return (
     saveMode === "native" ||
     Boolean(openPassword) ||
+    deletedSourceAnnotations.length > 0 ||
     annotations.some((annotation) => {
+      if (annotation.sourceAnnotationId) {
+        return true;
+      }
       if (annotation.type === "redact") {
         return true;
       }
@@ -1927,13 +2157,21 @@ function buildEngineEndpoints(apiPath = "/api/pdf/apply"): string[] {
 
 function buildEnginePayload(bytes: Uint8Array): EnginePayload {
   const pageIndexById = new Map(pageItems.map((item, index) => [item.id, index]));
+  const deleteOperations = buildEngineAnnotationDeleteOperations(pageIndexById);
   const annotationOperations = annotations
-    .map((annotation) => {
+    .flatMap((annotation) => {
       const pageIndex = pageIndexById.get(annotation.pageId);
       if (pageIndex === undefined) {
-        return null;
+        return [];
       }
-      return annotationToEngineOperation(annotation, pageIndex);
+      const replacementOperation = annotationToEngineOperation(annotation, pageIndex);
+      if (!replacementOperation) {
+        return [];
+      }
+      if (annotation.sourceAnnotationId && annotation.dirty) {
+        return [sourceAnnotationDeleteOperation(sourceAnnotationRef(annotation), pageIndex), replacementOperation];
+      }
+      return [replacementOperation];
     })
     .filter((operation): operation is EngineOperation => Boolean(operation));
   const flowSliceOperations = buildEngineFlowSliceOperations(pageIndexById);
@@ -1946,7 +2184,7 @@ function buildEnginePayload(bytes: Uint8Array): EnginePayload {
       sourceIndex: item.sourceIndex,
       rotation: item.rotation,
     })),
-    operations: [...flowSliceOperations, ...annotationOperations, ...flowOperations],
+    operations: [...deleteOperations, ...flowSliceOperations, ...annotationOperations, ...flowOperations],
     sourceTexts: buildEngineSourceTexts(pageIndexById),
     metadata: documentMetadata,
     saveOptions: {
@@ -1954,6 +2192,41 @@ function buildEnginePayload(bytes: Uint8Array): EnginePayload {
       redactionMode,
       validate: true,
     },
+  };
+}
+
+function buildEngineAnnotationDeleteOperations(pageIndexById: Map<string, number>): EngineOperation[] {
+  const operations: EngineOperation[] = [];
+  const seen = new Set<string>();
+  for (const ref of deletedSourceAnnotations) {
+    const pageIndex = pageIndexById.get(ref.pageId);
+    if (pageIndex === undefined) {
+      continue;
+    }
+    const operation = sourceAnnotationDeleteOperation(ref, pageIndex);
+    const key = `${operation.pageIndex}:${operation.sourceAnnotationId}:${operation.annotationSubtype}:${operation.x}:${operation.y}:${operation.width}:${operation.height}`;
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    operations.push(operation);
+  }
+  return operations;
+}
+
+function sourceAnnotationDeleteOperation(ref: SourceAnnotationRef, pageIndex: number): EngineOperation {
+  return {
+    type: "deleteAnnotation",
+    pageIndex,
+    x: ref.x,
+    y: ref.y,
+    width: ref.width,
+    height: ref.height,
+    color: "#ffffff",
+    opacity: 1,
+    strokeWidth: 0,
+    sourceAnnotationId: ref.sourceAnnotationId,
+    annotationSubtype: ref.subtype,
   };
 }
 
@@ -2052,7 +2325,10 @@ function buildEngineFlowSliceOperations(pageIndexById: Map<string, number>): Eng
   return operations;
 }
 
-function annotationToEngineOperation(annotation: Annotation, pageIndex: number): EngineOperation {
+function annotationToEngineOperation(annotation: Annotation, pageIndex: number): EngineOperation | null {
+  if (annotation.sourceAnnotationId && !annotation.dirty) {
+    return null;
+  }
   const base = {
     type: annotation.type,
     pageIndex,
@@ -2555,6 +2831,7 @@ function makeSnapshot(): Snapshot {
     documentMetadata: { ...documentMetadata },
     saveMode,
     redactionMode,
+    deletedSourceAnnotations: deletedSourceAnnotations.map((annotation) => ({ ...annotation })),
   };
 }
 
@@ -2565,6 +2842,7 @@ function applySnapshot(snapshot: Snapshot): void {
   documentMetadata = { ...snapshot.documentMetadata };
   saveMode = snapshot.saveMode;
   redactionMode = snapshot.redactionMode;
+  deletedSourceAnnotations = snapshot.deletedSourceAnnotations.map((annotation) => ({ ...annotation }));
   selectedId = null;
 }
 
