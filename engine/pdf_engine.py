@@ -13,6 +13,7 @@ import base64
 import io
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -59,12 +60,15 @@ class Operation(TypedDict, total=False):
     fieldValue: str
     checked: bool
     exportValue: str
+    options: list[str]
 
 
 class SaveOptions(TypedDict, total=False):
     annotationMode: str
     redactionMode: str
     flattenForms: bool
+    sanitize: bool
+    sanitizeOptions: dict[str, bool]
     validate: bool
 
 
@@ -94,6 +98,11 @@ def main() -> int:
     validate_parser.add_argument("--input")
     validate_parser.add_argument("--stdin", action="store_true")
     validate_parser.add_argument("--stdout", action="store_true")
+
+    preflight_parser = subparsers.add_parser("preflight", help="Inspect PDF production/security signals")
+    preflight_parser.add_argument("--input")
+    preflight_parser.add_argument("--stdin", action="store_true")
+    preflight_parser.add_argument("--stdout", action="store_true")
 
     args = parser.parse_args()
     if args.command == "extract":
@@ -138,6 +147,21 @@ def main() -> int:
                 raise SystemExit("--input is required without --stdin")
             pdf_bytes = Path(args.input).read_bytes()
         result = validate_pdf_bytes(pdf_bytes)
+        if args.stdout:
+            write_json(result, sys.stdout)
+        else:
+            write_json(result, sys.stdout)
+        return 0
+
+    if args.command == "preflight":
+        if args.stdin:
+            payload = json.load(sys.stdin)
+            pdf_bytes = base64.b64decode(payload["pdfBase64"])
+        else:
+            if not args.input:
+                raise SystemExit("--input is required without --stdin")
+            pdf_bytes = Path(args.input).read_bytes()
+        result = preflight_pdf_bytes(pdf_bytes)
         if args.stdout:
             write_json(result, sys.stdout)
         else:
@@ -250,6 +274,8 @@ def apply_operations(
                 annots=save_options.get("annotationMode") == "flatten",
                 widgets=save_options.get("flattenForms", False),
             )
+        if save_options.get("sanitize", False):
+            sanitize_document(output, save_options.get("sanitizeOptions"))
         buffer = io.BytesIO()
         output.save(buffer, garbage=4, deflate=True, clean=True)
         edited = buffer.getvalue()
@@ -281,8 +307,67 @@ def normalize_save_options(value: Any) -> SaveOptions:
         "annotationMode": "native" if mode == "native" else "flatten",
         "redactionMode": redaction_mode,
         "flattenForms": bool(value.get("flattenForms", False)),
+        "sanitize": bool(value.get("sanitize", False)),
+        "sanitizeOptions": normalize_sanitize_options(value.get("sanitizeOptions")),
         "validate": bool(value.get("validate", True)),
     }
+
+
+def normalize_sanitize_options(value: Any) -> dict[str, bool]:
+    defaults = {
+        "metadata": True,
+        "xmlMetadata": True,
+        "embeddedFiles": True,
+        "javascript": True,
+        "links": True,
+        "thumbnails": True,
+        "resetFormFields": False,
+    }
+    if not isinstance(value, dict):
+        return defaults
+    return {
+        key: bool(value.get(key, default_value))
+        for key, default_value in defaults.items()
+    }
+
+
+def sanitize_document(document: fitz.Document, options: Any) -> None:
+    normalized = normalize_sanitize_options(options)
+    document.scrub(
+        attached_files=normalized["embeddedFiles"],
+        clean_pages=True,
+        embedded_files=normalized["embeddedFiles"],
+        hidden_text=True,
+        javascript=normalized["javascript"],
+        metadata=normalized["metadata"],
+        redactions=True,
+        redact_images=fitz.PDF_REDACT_IMAGE_NONE,
+        remove_links=normalized["links"],
+        reset_fields=normalized["resetFormFields"],
+        reset_responses=normalized["resetFormFields"],
+        thumbnails=normalized["thumbnails"],
+        xml_metadata=normalized["xmlMetadata"],
+    )
+    remove_catalog_hidden_entries(document, normalized)
+
+
+def remove_catalog_hidden_entries(document: fitz.Document, options: dict[str, bool]) -> None:
+    try:
+        catalog = document.pdf_catalog()
+    except Exception:  # noqa: BLE001
+        return
+    if options["javascript"]:
+        for key in ("OpenAction", "AA"):
+            null_xref_key(document, catalog, key)
+    if options["embeddedFiles"]:
+        null_xref_key(document, catalog, "Names")
+
+
+def null_xref_key(document: fitz.Document, xref: int, key: str) -> None:
+    try:
+        document.xref_set_key(xref, key, "null")
+    except Exception:  # noqa: BLE001 - scrub remains best-effort but export validation still runs
+        pass
 
 
 def apply_metadata(document: fitz.Document, value: Any) -> None:
@@ -387,10 +472,16 @@ def apply_form_field_phase(
     for operation in form_operations:
         target_rect = to_rect(operation, metrics)
         field_name = str(operation.get("fieldName", ""))
-        for widget in page.widgets() or []:
+        widgets = list(page.widgets() or [])
+        if str(operation.get("fieldType", "")) == "radio" and field_name:
+            group_widgets = [widget for widget in widgets if widget.field_name == field_name]
+            for widget in group_widgets:
+                update_widget_value(widget, operation, target_rect)
+            continue
+        for widget in widgets:
             if not widget_matches_form_operation(widget, target_rect, field_name):
                 continue
-            update_widget_value(widget, operation)
+            update_widget_value(widget, operation, target_rect)
             break
 
 
@@ -400,7 +491,7 @@ def widget_matches_form_operation(widget: fitz.Widget, target_rect: fitz.Rect, f
     return rects_match(widget.rect, target_rect)
 
 
-def update_widget_value(widget: fitz.Widget, operation: Operation) -> None:
+def update_widget_value(widget: fitz.Widget, operation: Operation, target_rect: fitz.Rect) -> None:
     field_type = str(operation.get("fieldType", ""))
     if field_type == "checkbox":
         checked = bool(operation.get("checked", False))
@@ -408,6 +499,13 @@ def update_widget_value(widget: fitz.Widget, operation: Operation) -> None:
             widget.field_value = widget.on_state() or str(operation.get("exportValue", "Yes"))
         else:
             widget.field_value = "Off"
+        widget.update()
+        return
+    if field_type == "radio":
+        selected_value = str(operation.get("fieldValue") or operation.get("exportValue") or "")
+        on_state = widget.on_state() or str(operation.get("exportValue", "Yes"))
+        checked = bool(operation.get("checked", False)) and rects_match(widget.rect, target_rect)
+        widget.field_value = on_state if checked or selected_value == on_state else "Off"
         widget.update()
         return
     widget.field_value = str(operation.get("fieldValue", ""))
@@ -773,6 +871,110 @@ def validate_pdf_bytes(pdf_bytes: bytes) -> dict[str, Any]:
         "qpdfChecked": qpdf_checked,
         "errors": errors,
     }
+
+
+def preflight_pdf_bytes(pdf_bytes: bytes) -> dict[str, Any]:
+    validation = validate_pdf_bytes(pdf_bytes)
+    warnings: list[str] = []
+    pages: list[dict[str, Any]] = []
+    metadata_present = False
+    xmp_present = False
+    embedded_file_count = 0
+    javascript_count = 0
+    form_field_count = 0
+    font_names: set[str] = set()
+    try:
+        with fitz.open(stream=pdf_bytes, filetype="pdf") as document:
+            if document.needs_pass:
+                warnings.append("encrypted document cannot be fully preflighted without password")
+            else:
+                metadata_present = any(
+                    bool(value)
+                    for key, value in (document.metadata or {}).items()
+                    if key not in {"format", "encryption"} and isinstance(value, str)
+                )
+                try:
+                    xmp_present = bool(document.get_xml_metadata())
+                except Exception:  # noqa: BLE001 - metadata checks should stay diagnostic-only
+                    xmp_present = False
+                try:
+                    embedded_file_count = int(document.embfile_count())
+                except Exception:  # noqa: BLE001
+                    embedded_file_count = 0
+                javascript_count = count_javascript_objects(document)
+                for page_index in range(document.page_count):
+                    page = document.load_page(page_index)
+                    annots = list(page.annots() or [])
+                    widgets = list(page.widgets() or [])
+                    form_field_count += len(widgets)
+                    page_fonts = page.get_fonts(full=True)
+                    for font in page_fonts:
+                        if len(font) > 3 and font[3]:
+                            font_names.add(str(font[3]))
+                    pages.append(
+                        {
+                            "index": page_index,
+                            "width": page.rect.width,
+                            "height": page.rect.height,
+                            "mediaBox": rect_to_list(page.mediabox),
+                            "cropBox": rect_to_list(page.cropbox),
+                            "rotation": page.rotation,
+                            "images": len(page.get_images(full=True)),
+                            "drawings": len(page.get_drawings()),
+                            "annotations": len(annots),
+                            "widgets": len(widgets),
+                            "fonts": len(page_fonts),
+                        }
+                    )
+    except Exception as exc:  # noqa: BLE001
+        warnings.append(str(exc))
+
+    if metadata_present:
+        warnings.append("document metadata is present")
+    if xmp_present:
+        warnings.append("XMP metadata is present")
+    if embedded_file_count:
+        warnings.append(f"{embedded_file_count} embedded file(s) present")
+    if javascript_count:
+        warnings.append(f"{javascript_count} JavaScript/action object(s) present")
+    if not validation.get("qpdfChecked"):
+        warnings.append("qpdf structural check was not run")
+
+    return {
+        "ok": validation["ok"] and len(warnings) == 0,
+        "validation": validation,
+        "warnings": warnings,
+        "pageCount": validation["pageCount"],
+        "encrypted": validation["encrypted"],
+        "metadataPresent": metadata_present,
+        "xmpPresent": xmp_present,
+        "embeddedFileCount": embedded_file_count,
+        "javascriptCount": javascript_count,
+        "formFieldCount": form_field_count,
+        "fontCount": len(font_names),
+        "fonts": sorted(font_names),
+        "pages": pages,
+    }
+
+
+def count_javascript_objects(document: fitz.Document) -> int:
+    count = 0
+    for xref in range(1, document.xref_length()):
+        try:
+            source = document.xref_object(xref, compressed=False)
+        except Exception:  # noqa: BLE001 - malformed objects are handled by validation
+            continue
+        compact = "".join(source.split())
+        has_script_action = re.search(r"/(?:JavaScript|JS|Launch|RichMedia)\b", source) is not None
+        has_open_action = re.search(r"/OpenAction\b", source) is not None and "/OpenActionnull" not in compact
+        has_additional_action = re.search(r"/AA\b", source) is not None and "/AAnull" not in compact
+        if has_script_action or has_open_action or has_additional_action:
+            count += 1
+    return count
+
+
+def rect_to_list(rect: fitz.Rect) -> list[float]:
+    return [rect.x0, rect.y0, rect.x1, rect.y1]
 
 
 def flow_slice_source_rect(operation: Operation, metrics: PageMetrics) -> fitz.Rect:

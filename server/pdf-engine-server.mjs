@@ -55,6 +55,13 @@ const server = createServer(async (request, response) => {
       return;
     }
 
+    if (request.method === "POST" && request.url === "/api/pdf/preflight") {
+      const payload = await readJsonBody(request);
+      const result = await runEngine(["preflight", "--stdin", "--stdout"], payload);
+      sendJson(response, 200, result);
+      return;
+    }
+
     if (request.method === "POST" && request.url === "/api/pdf/extract") {
       const payload = await readJsonBody(request);
       const pdfBase64 = String(payload.pdfBase64 || "");

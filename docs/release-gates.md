@@ -7,6 +7,9 @@ npm run verify:local
 ```
 
 This requires qpdf and strict engine mode.
+Playwright starts fresh Vite and engine servers by default so E2E tests cannot
+accidentally validate stale local processes. Set `PLAYWRIGHT_REUSE_SERVER=1`
+only for deliberate interactive debugging.
 
 ## Feature Gate
 
@@ -19,6 +22,9 @@ Every new PDF feature must include:
 - Text extraction assertions when text is involved.
 - Render-diff or page geometry assertions when layout is involved.
 - Documentation update for support limits.
+- Hidden-data assertions when sanitizer or redaction behavior is involved.
+- Preflight report assertions when document structure or hidden-info reporting
+  changes.
 
 ## UI Gate
 
@@ -45,3 +51,11 @@ Every new PDF feature must include:
 Before release, record manual smoke results for Acrobat Reader, Chrome, and
 macOS Preview. Acrobat Pro is required for redaction/sanitization, signatures,
 forms, preflight, and accessibility release claims.
+
+## Sanitization And Preflight Gate
+
+- Sanitizer changes must prove removed secrets are absent from raw PDF bytes.
+- Preflight changes must include both positive and cleaned-document assertions.
+- qpdf validation remains mandatory after sanitization.
+- Do not claim PDF/A, PDF/X, accessibility, or full hidden-information removal
+  unless those dedicated fixtures and external compatibility checks pass.

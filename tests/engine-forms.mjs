@@ -14,8 +14,14 @@ await fs.mkdir(workDir, { recursive: true });
 await createFormPdf(inputPath);
 
 const before = await readWidgets(inputPath);
-if (before.length !== 2) {
-  throw new Error(`expected two widgets in form fixture: ${JSON.stringify(before)}`);
+if (before.length !== 6) {
+  throw new Error(`expected six widgets in form fixture: ${JSON.stringify(before)}`);
+}
+const departmentField = requireWidget(before, "department");
+const regionField = requireWidget(before, "region");
+const yearlyRadio = before.find((widget) => widget.name === "payCycle" && widget.on === "1");
+if (!yearlyRadio) {
+  throw new Error(`expected yearly radio widget: ${JSON.stringify(before)}`);
 }
 
 const fillPayload = {
@@ -51,6 +57,28 @@ const fillPayload = {
       opacity: 1,
       strokeWidth: 1,
     },
+    {
+      ...widgetOperationBase(departmentField),
+      fieldName: "department",
+      fieldType: "combo",
+      fieldValue: "Engineering",
+      options: ["Engineering", "Design", "Legal"],
+    },
+    {
+      ...widgetOperationBase(regionField),
+      fieldName: "region",
+      fieldType: "list",
+      fieldValue: "Busan",
+      options: ["Seoul", "Busan", "Jeju"],
+    },
+    {
+      ...widgetOperationBase(yearlyRadio),
+      fieldName: "payCycle",
+      fieldType: "radio",
+      fieldValue: "1",
+      checked: true,
+      exportValue: "1",
+    },
   ],
   metadata: {
     title: "Form fill roundtrip",
@@ -72,7 +100,18 @@ await applyEngine(inputPath, filledPath, fillPayload, "form-fill");
 const filledWidgets = await readWidgets(filledPath);
 const name = filledWidgets.find((widget) => widget.name === "name");
 const agree = filledWidgets.find((widget) => widget.name === "agree");
-if (name?.value !== "Bob Builder" || agree?.value !== "Off") {
+const department = filledWidgets.find((widget) => widget.name === "department");
+const region = filledWidgets.find((widget) => widget.name === "region");
+const monthly = filledWidgets.find((widget) => widget.name === "payCycle" && widget.on === "0");
+const yearly = filledWidgets.find((widget) => widget.name === "payCycle" && widget.on === "1");
+if (
+  name?.value !== "Bob Builder" ||
+  agree?.value !== "Off" ||
+  department?.value !== "Engineering" ||
+  region?.value !== "Busan" ||
+  monthly?.value !== "Off" ||
+  yearly?.value !== "1"
+) {
   throw new Error(`filled widget values were not preserved: ${JSON.stringify(filledWidgets)}`);
 }
 const filledValidation = await validatePdf(filledPath);
@@ -109,6 +148,21 @@ async function createFormPdf(filePath) {
   const agree = form.createCheckBox("agree");
   agree.addToPage(page, { x: 120, y: 650, width: 16, height: 16 });
   agree.check();
+  page.drawText("Department:", { x: 72, y: 606, size: 12, font });
+  const department = form.createDropdown("department");
+  department.addOptions(["Engineering", "Design", "Legal"]);
+  department.select("Design");
+  department.addToPage(page, { x: 160, y: 596, width: 140, height: 24 });
+  page.drawText("Region:", { x: 72, y: 552, size: 12, font });
+  const region = form.createOptionList("region");
+  region.addOptions(["Seoul", "Busan", "Jeju"]);
+  region.select("Seoul");
+  region.addToPage(page, { x: 160, y: 528, width: 140, height: 48 });
+  page.drawText("Pay cycle:", { x: 72, y: 494, size: 12, font });
+  const payCycle = form.createRadioGroup("payCycle");
+  payCycle.addOptionToPage("Monthly", page, { x: 160, y: 488, width: 16, height: 16 });
+  payCycle.addOptionToPage("Yearly", page, { x: 210, y: 488, width: 16, height: 16 });
+  payCycle.select("Monthly");
   await fs.writeFile(filePath, await document.save());
 }
 
@@ -121,11 +175,34 @@ async function readWidgets(filePath) {
       "items = []",
       "for page in doc:",
       "    for widget in page.widgets() or []:",
-      "        items.append({'name': widget.field_name, 'type': widget.field_type_string, 'value': widget.field_value, 'rect': [widget.rect.x0, widget.rect.y0, widget.rect.x1, widget.rect.y1]})",
+      "        items.append({'name': widget.field_name, 'type': widget.field_type_string, 'value': widget.field_value, 'on': widget.on_state() if hasattr(widget, 'on_state') else None, 'rect': [widget.rect.x0, widget.rect.y0, widget.rect.x1, widget.rect.y1]})",
       "print(json.dumps(items, ensure_ascii=False))",
       "doc.close()",
     ].join("\n"),
     filePath,
   ]);
   return JSON.parse(stdout);
+}
+
+function requireWidget(widgets, name) {
+  const widget = widgets.find((candidate) => candidate.name === name);
+  if (!widget) {
+    throw new Error(`missing widget ${name}: ${JSON.stringify(widgets)}`);
+  }
+  return widget;
+}
+
+function widgetOperationBase(widget) {
+  const [x0, y0, x1, y1] = widget.rect;
+  return {
+    type: "formField",
+    pageIndex: 0,
+    x: x0 / 612,
+    y: y0 / 792,
+    width: (x1 - x0) / 612,
+    height: (y1 - y0) / 792,
+    color: "#172026",
+    opacity: 1,
+    strokeWidth: 1,
+  };
 }

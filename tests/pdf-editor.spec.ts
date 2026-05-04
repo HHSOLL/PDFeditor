@@ -189,6 +189,25 @@ async function createFormPdf(filePath: string): Promise<void> {
   await fs.writeFile(filePath, await document.save());
 }
 
+async function createChoiceFormPdf(filePath: string): Promise<void> {
+  await fs.mkdir(path.dirname(filePath), { recursive: true });
+  const document = await PDFDocument.create();
+  const page = document.addPage([612, 792]);
+  const font = await document.embedFont(StandardFonts.Helvetica);
+  page.drawText("Department:", { x: 72, y: 700, size: 12, font });
+  page.drawText("Region:", { x: 72, y: 650, size: 12, font });
+  const form = document.getForm();
+  const department = form.createDropdown("department");
+  department.addOptions(["Engineering", "Design", "Legal"]);
+  department.select("Design");
+  department.addToPage(page, { x: 160, y: 690, width: 160, height: 24 });
+  const region = form.createOptionList("region");
+  region.addOptions(["Seoul", "Busan", "Jeju"]);
+  region.select("Seoul");
+  region.addToPage(page, { x: 160, y: 620, width: 160, height: 54 });
+  await fs.writeFile(filePath, await document.save());
+}
+
 async function annotationCount(filePath: string): Promise<number> {
   const stdout = await runPython(
     [
@@ -655,6 +674,23 @@ test("saves metadata and duplicated pages through the advanced save pipeline", a
   expect(exported.getAuthor()).toBe("HHSOLL");
 });
 
+test("runs preflight from the inspector without an inert command button", async ({ page }) => {
+  const samplePath = path.resolve("tmp/sample-preflight-ui.pdf");
+  await createSamplePdf(samplePath);
+
+  await page.goto("http://127.0.0.1:5173/");
+  await page
+    .locator('input[type="file"][accept="application/pdf"]')
+    .setInputFiles(samplePath);
+  await expect(page.locator(".page-shell canvas")).toBeVisible();
+
+  await expect(page.locator("#preflightButton")).toBeEnabled();
+  await page.locator("#preflightButton").click();
+  await expect(page.locator(".preflight-panel")).toContainText("사전 검사");
+  await expect(page.locator(".preflight-panel")).toContainText("1쪽");
+  await expect(page.locator("#toast")).toContainText("사전 검사");
+});
+
 test("imports existing PDF annotations and exports real annotation deletion", async ({
   page,
 }) => {
@@ -707,6 +743,31 @@ test("fills imported AcroForm text and checkbox fields through the engine", asyn
   await download.saveAs(exportedPath);
 
   expect(await widgetValues(exportedPath)).toEqual({ agree: "Off", name: "Carol Form" });
+});
+
+test("fills imported AcroForm choice fields through the engine", async ({
+  page,
+}) => {
+  const samplePath = path.resolve("tmp/sample-choice-form.pdf");
+  const exportedPath = path.resolve("tmp/exported-choice-form.pdf");
+  await createChoiceFormPdf(samplePath);
+  expect(await widgetValues(samplePath)).toEqual({ department: "Design", region: "Seoul" });
+
+  await page.goto("http://127.0.0.1:5173/");
+  await page
+    .locator('input[type="file"][accept="application/pdf"]')
+    .setInputFiles(samplePath);
+
+  await expect(page.locator(".annotation.form-field")).toHaveCount(2);
+  await page.locator(".annotation.form-field select").first().selectOption("Engineering");
+  await page.locator(".annotation.form-field select").nth(1).selectOption("Busan");
+
+  const downloadPromise = page.waitForEvent("download");
+  await page.getByRole("button", { name: "PDF 내보내기" }).click();
+  const download = await downloadPromise;
+  await download.saveAs(exportedPath);
+
+  expect(await widgetValues(exportedPath)).toEqual({ department: "Engineering", region: "Busan" });
 });
 
 test("blocks engine-required export when the PDF engine is unavailable", async ({ page }) => {

@@ -9,21 +9,23 @@ behavior is verified with fixtures and compatibility checks.
 | Edit PDF | 15 | Redaction plus replacement text; first-pass semantic paragraph reflow; new image/text objects | Text/image/vector fixtures roundtrip with 2px tolerance |
 | Page organization | 8 | Delete, reorder, rotate, duplicate, extract | Merge/split/crop/replace plus bookmarks/links/forms remap |
 | Comments/annotations | 8 | New annotations plus existing Square/FreeText/Highlight/Ink import/edit/delete path | Acrobat/Preview/Chrome annotations import/edit/delete/flatten |
-| Forms | 10 | AcroForm text and checkbox fill/save, engine flatten path | AcroForm fields fill/save/flatten with appearance regeneration |
+| Forms | 10 | AcroForm text, checkbox, radio, combo, and list fill/save, engine flatten path | AcroForm fields fill/save/flatten with appearance regeneration |
 | Signatures/security | 10 | Password-aware open/apply only | Image signatures and certificate signing validate in Acrobat |
-| Redaction/sanitization | 10 | Redaction policies tested | Hidden information sanitizer removes metadata/XMP/JS/attachments |
+| Redaction/sanitization | 10 | Redaction policies tested; hidden-info sanitizer removes metadata, XMP, embedded files, JavaScript/actions, links, and thumbnails | Hidden information sanitizer also covers hidden layers, comments, stale incremental data, search indexes, and unreferenced data |
 | OCR/conversion | 8 | Not implemented | Searchable scanned PDFs with OCR correction |
 | Accessibility | 6 | Not implemented | Tags, reading order, alt text, PDF/UA basic report |
-| Print production/preflight | 5 | qpdf structural checks | PDF/A/X, font, image, color, page-box reports |
+| Print production/preflight | 5 | qpdf structural checks plus basic engine preflight for metadata, XMP, embedded files, JavaScript/actions, forms, fonts, images, drawings, annotations, and page boxes | PDF/A/X, font, image, color, page-box reports with fixups |
 | Compare/batch automation | 4 | Not implemented | Compare report and saved batch action execution |
 | Packaging/performance/support | 1 | Local web app | Desktop package, large-file benchmarks, crash recovery |
 
 ## Current Score
 
 The current project is a verified advanced prototype, not an Acrobat Pro
-replacement. It scores highest in save validation and is now beginning the
-forms and imported-annotation lanes; signatures, OCR, accessibility, and
-preflight remain mostly unimplemented.
+replacement. It scores highest in save validation and has working first-pass
+forms, imported annotations, hidden-info sanitization, and basic preflight
+reporting. Signatures, OCR, accessibility, PDF/A/X preflight fixups, compare,
+batch automation, and full object editing remain outside the completed support
+boundary.
 
 ## Current Reflow Score Boundary
 

@@ -63,6 +63,8 @@ let pageCanvasSnapshots = new Map<string, string>();
 let documentMetadata: DocumentMetadata = emptyMetadata();
 let saveMode: SaveMode = "flatten";
 let redactionMode: RedactionMode = "textOnly";
+let sanitizeHiddenInfo = false;
+let lastPreflightReport: PreflightReport | null = null;
 let openPassword = "";
 let currentPageId: string | null = null;
 let selectedId: string | null = null;
@@ -112,6 +114,14 @@ registerCommand({
   enabled: () => Boolean(originalBytes && pdfDocument),
   disabledReason: () => "먼저 PDF를 열어주세요.",
   run: () => void exportPdf(),
+});
+registerCommand({
+  id: "preflight-pdf",
+  label: "사전 검사",
+  implemented: true,
+  enabled: () => Boolean(originalBytes && pdfDocument),
+  disabledReason: () => "먼저 PDF를 열어주세요.",
+  run: () => void runPreflightCheck(),
 });
 registerCommand({
   id: "undo",
@@ -273,6 +283,17 @@ type EngineExtractPage = {
 };
 type EngineExtractResponse = {
   pages: EngineExtractPage[];
+};
+type PreflightReport = {
+  ok: boolean;
+  warnings: string[];
+  pageCount: number;
+  metadataPresent: boolean;
+  xmpPresent: boolean;
+  embeddedFileCount: number;
+  javascriptCount: number;
+  formFieldCount: number;
+  fontCount: number;
 };
 
 function registerCommand(command: FeatureCommand): void {
@@ -572,6 +593,8 @@ async function loadPdf(file: File): Promise<void> {
   documentMetadata = await readDocumentMetadata(pdfDocument);
   saveMode = "flatten";
   redactionMode = "textOnly";
+  sanitizeHiddenInfo = false;
+  lastPreflightReport = null;
   selectedId = null;
   currentPageId = pageItems[0]?.id ?? null;
   await cacheSourceTextItems();
@@ -1068,24 +1091,48 @@ function renderAnnotation(annotation: Annotation, metrics: PageMetrics): Element
 }
 
 function renderFormField(annotation: FormFieldAnnotation, node: HTMLDivElement): void {
-  node.classList.add("form-field", annotation.fieldType === "checkbox" ? "checkbox" : "text-field");
+  node.classList.add("form-field", annotation.fieldType === "checkbox" || annotation.fieldType === "radio" ? "checkbox" : "text-field");
   node.style.borderColor = selectedId === annotation.id ? "#176b58" : "rgba(23, 107, 88, 0.55)";
   node.style.background = "rgba(255, 255, 255, 0.72)";
-  if (annotation.fieldType === "checkbox") {
+  if (annotation.fieldType === "checkbox" || annotation.fieldType === "radio") {
     const checkbox = document.createElement("input");
-    checkbox.type = "checkbox";
+    checkbox.type = annotation.fieldType === "radio" ? "radio" : "checkbox";
+    checkbox.name = annotation.fieldName;
     checkbox.checked = Boolean(annotation.checked);
     checkbox.ariaLabel = annotation.fieldName;
     checkbox.addEventListener("pointerdown", (event) => event.stopPropagation());
     checkbox.addEventListener("change", () => {
-      annotation.checked = checkbox.checked;
-      annotation.fieldValue = checkbox.checked ? annotation.exportValue ?? "Yes" : "Off";
+      setFormFieldChecked(annotation, checkbox.checked);
       markAnnotationDirty(annotation);
       commitHistory();
       renderInspector();
       renderCurrentLayer();
     });
     node.append(checkbox);
+    return;
+  }
+
+  if (annotation.fieldType === "combo" || annotation.fieldType === "list") {
+    const select = document.createElement("select");
+    select.value = annotation.fieldValue;
+    select.ariaLabel = annotation.fieldName;
+    if (annotation.fieldType === "list") {
+      select.size = Math.max(2, Math.min(6, annotation.options?.length ?? 4));
+    }
+    for (const optionValue of annotation.options?.length ? annotation.options : [annotation.fieldValue].filter(Boolean)) {
+      const option = document.createElement("option");
+      option.value = optionValue;
+      option.textContent = optionValue;
+      select.append(option);
+    }
+    select.addEventListener("pointerdown", (event) => event.stopPropagation());
+    select.addEventListener("change", () => {
+      annotation.fieldValue = select.value;
+      markAnnotationDirty(annotation);
+      syncInspectorValues(annotation);
+    });
+    select.addEventListener("blur", commitHistory);
+    node.append(select);
     return;
   }
 
@@ -1101,6 +1148,25 @@ function renderFormField(annotation: FormFieldAnnotation, node: HTMLDivElement):
   });
   input.addEventListener("blur", commitHistory);
   node.append(input);
+}
+
+function setFormFieldChecked(annotation: FormFieldAnnotation, checked: boolean): void {
+  if (annotation.fieldType === "radio" && checked) {
+    for (const peer of annotations) {
+      if (
+        peer.type === "formField" &&
+        peer.fieldType === "radio" &&
+        peer.id !== annotation.id &&
+        peer.fieldName === annotation.fieldName
+      ) {
+        peer.checked = false;
+        peer.fieldValue = "Off";
+        markAnnotationDirty(peer);
+      }
+    }
+  }
+  annotation.checked = checked;
+  annotation.fieldValue = checked ? annotation.exportValue ?? "Yes" : "Off";
 }
 
 function renderPen(annotation: PenAnnotation, metrics: PageMetrics): SVGSVGElement {
@@ -1281,7 +1347,7 @@ function syncInspectorValues(annotation: Annotation): void {
   }
   if (annotation.type !== "text") {
     if (annotation.type === "formField") {
-      const formValue = document.querySelector<HTMLInputElement>("#formValue");
+      const formValue = document.querySelector<HTMLInputElement | HTMLSelectElement>("#formValue");
       if (formValue && document.activeElement !== formValue) {
         formValue.value = annotation.fieldValue;
       }
@@ -2083,13 +2149,14 @@ function convertWidgetAnnotation(
     return null;
   }
   const fieldType = String(raw.fieldType ?? "");
+  const fieldValue = String(raw.fieldValue ?? annotationText(raw));
   if (fieldType === "Tx") {
     return {
       ...base,
       type: "formField",
       fieldName,
       fieldType: "text",
-      fieldValue: annotationText(raw),
+      fieldValue,
       opacity: 1,
       strokeWidth: base.strokeWidth || 1,
     };
@@ -2109,7 +2176,55 @@ function convertWidgetAnnotation(
       strokeWidth: base.strokeWidth || 1,
     };
   }
+  if (fieldType === "Btn" && raw.radioButton === true) {
+    const exportValue = String(raw.exportValue ?? fieldValue ?? "Yes");
+    return {
+      ...base,
+      type: "formField",
+      fieldName,
+      fieldType: "radio",
+      fieldValue,
+      checked: fieldValue !== "" && fieldValue !== "Off",
+      exportValue,
+      opacity: 1,
+      strokeWidth: base.strokeWidth || 1,
+    };
+  }
+  if (fieldType === "Ch") {
+    const options = annotationOptions(raw);
+    const isCombo = raw.comboBox === true || raw.combo === true;
+    return {
+      ...base,
+      type: "formField",
+      fieldName,
+      fieldType: isCombo ? "combo" : "list",
+      fieldValue,
+      options,
+      opacity: 1,
+      strokeWidth: base.strokeWidth || 1,
+    };
+  }
   return null;
+}
+
+function annotationOptions(raw: Record<string, unknown>): string[] {
+  const rawOptions = raw.options;
+  if (!Array.isArray(rawOptions)) {
+    return [];
+  }
+  return rawOptions
+    .map((option) => {
+      if (typeof option === "string") {
+        return option;
+      }
+      if (typeof option === "object" && option !== null) {
+        const record = option as Record<string, unknown>;
+        const displayValue = record.displayValue ?? record.exportValue ?? record.value;
+        return typeof displayValue === "string" ? displayValue : "";
+      }
+      return "";
+    })
+    .filter(Boolean);
 }
 
 function annotationRect(rawRect: unknown, viewport: PdfPageViewport): NormalizedRect | null {
@@ -2684,6 +2799,17 @@ function documentFields(): string {
         <option value="imagesAndText"${redactionMode === "imagesAndText" ? " selected" : ""}>이미지와 텍스트 제거</option>
       </select>
     </div>
+    <div class="field">
+      <label class="checkbox-line">
+        <input id="sanitizeHiddenInfo" type="checkbox"${sanitizeHiddenInfo ? " checked" : ""} />
+        숨은 정보 제거
+      </label>
+      <p class="status-line">메타데이터, XMP, 첨부파일, JavaScript/action, 링크, 썸네일을 저장 시 제거합니다.</p>
+    </div>
+    <div class="mini-actions">
+      <button id="preflightButton" type="button">사전 검사</button>
+    </div>
+    ${lastPreflightReport ? preflightSummary(lastPreflightReport) : ""}
     <details class="metadata-panel">
       <summary>문서 메타데이터</summary>
       <div class="field">
@@ -2706,6 +2832,17 @@ function documentFields(): string {
   `;
 }
 
+function preflightSummary(report: PreflightReport): string {
+  const warningText = report.warnings.length ? `${report.warnings.length}개 경고` : "경고 없음";
+  return `
+    <div class="preflight-panel">
+      <strong>사전 검사: ${report.ok ? "통과" : "확인 필요"}</strong>
+      <span>${report.pageCount}쪽 · ${report.fontCount}개 폰트 · ${report.formFieldCount}개 폼 필드 · ${warningText}</span>
+      ${report.warnings.length ? `<small>${escapeHtml(report.warnings.slice(0, 3).join(" · "))}</small>` : ""}
+    </div>
+  `;
+}
+
 function textFields(annotation: TextAnnotation): string {
   return `
     <div class="field">
@@ -2720,13 +2857,19 @@ function textFields(annotation: TextAnnotation): string {
 }
 
 function formFieldFields(annotation: FormFieldAnnotation): string {
-  const valueControl = annotation.fieldType === "checkbox"
+  const valueControl = annotation.fieldType === "checkbox" || annotation.fieldType === "radio"
     ? `
       <label class="checkbox-line">
         <input id="formChecked" type="checkbox"${annotation.checked ? " checked" : ""} />
         선택됨
       </label>
     `
+    : annotation.fieldType === "combo" || annotation.fieldType === "list"
+      ? `
+        <select id="formValue"${annotation.fieldType === "list" ? " size=\"4\"" : ""}>
+          ${formFieldOptions(annotation)}
+        </select>
+      `
     : `<input id="formValue" type="text" value="${escapeHtml(annotation.fieldValue)}" />`;
   return `
     <div class="field">
@@ -2738,6 +2881,13 @@ function formFieldFields(annotation: FormFieldAnnotation): string {
       ${valueControl}
     </div>
   `;
+}
+
+function formFieldOptions(annotation: FormFieldAnnotation): string {
+  const options = annotation.options?.length ? annotation.options : [annotation.fieldValue].filter(Boolean);
+  return options
+    .map((option) => `<option value="${escapeHtml(option)}"${option === annotation.fieldValue ? " selected" : ""}>${escapeHtml(option)}</option>`)
+    .join("");
 }
 
 function colorField(annotation: Annotation): string {
@@ -2811,6 +2961,13 @@ function bindDocumentControls(): void {
   bindMetadataField("metaAuthor", "author");
   bindMetadataField("metaSubject", "subject");
   bindMetadataField("metaKeywords", "keywords");
+  const sanitizeField = document.querySelector<HTMLInputElement>("#sanitizeHiddenInfo");
+  sanitizeField?.addEventListener("change", () => {
+    sanitizeHiddenInfo = sanitizeField.checked;
+    lastPreflightReport = null;
+    commitHistory();
+  });
+  bindCommandButton("preflightButton", "preflight-pdf");
 }
 
 function bindMetadataField(id: string, key: keyof DocumentMetadata): void {
@@ -2855,9 +3012,9 @@ function bindInspectorFields(annotation: Annotation): void {
     }
   });
 
-  const formValue = document.querySelector<HTMLInputElement>("#formValue");
+  const formValue = document.querySelector<HTMLInputElement | HTMLSelectElement>("#formValue");
   formValue?.addEventListener("change", () => {
-    if (annotation.type === "formField" && annotation.fieldType === "text") {
+    if (annotation.type === "formField" && annotation.fieldType !== "checkbox" && annotation.fieldType !== "radio") {
       annotation.fieldValue = formValue.value;
       markAnnotationDirty(annotation);
       commitHistory();
@@ -2868,9 +3025,8 @@ function bindInspectorFields(annotation: Annotation): void {
 
   const formChecked = document.querySelector<HTMLInputElement>("#formChecked");
   formChecked?.addEventListener("change", () => {
-    if (annotation.type === "formField" && annotation.fieldType === "checkbox") {
-      annotation.checked = formChecked.checked;
-      annotation.fieldValue = formChecked.checked ? annotation.exportValue ?? "Yes" : "Off";
+    if (annotation.type === "formField" && (annotation.fieldType === "checkbox" || annotation.fieldType === "radio")) {
+      setFormFieldChecked(annotation, formChecked.checked);
       markAnnotationDirty(annotation);
       commitHistory();
       renderInspector();
@@ -3260,6 +3416,69 @@ async function exportPdf(): Promise<void> {
   downloadPdf(bytes, "PDF 엔진으로 저장하고 검증했습니다.");
 }
 
+async function runPreflightCheck(): Promise<void> {
+  if (!originalBytes || !pdfDocument) {
+    showToast("먼저 PDF를 열어주세요.");
+    return;
+  }
+  let bytes: Uint8Array;
+  try {
+    bytes = await buildExportPdfBytes();
+  } catch (error) {
+    showToast(error instanceof Error ? error.message : "사전 검사할 PDF를 만들 수 없습니다.");
+    return;
+  }
+  const report = await tryPreflightWithEngine(bytes);
+  if (!report) {
+    showToast("PDF 엔진 사전 검사를 실행할 수 없습니다. npm run engine:serve를 확인하세요.");
+    return;
+  }
+  lastPreflightReport = report;
+  renderInspector();
+  showToast(report.warnings.length ? `사전 검사 경고 ${report.warnings.length}개` : "사전 검사 통과");
+}
+
+async function tryPreflightWithEngine(bytes: Uint8Array): Promise<PreflightReport | null> {
+  const endpoints = buildEngineEndpoints("/api/pdf/preflight");
+  for (const endpoint of endpoints) {
+    try {
+      const response = await fetch(endpoint, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ pdfBase64: bytesToBase64(bytes) }),
+      });
+      if (!response.ok) {
+        continue;
+      }
+      const result: unknown = await response.json();
+      if (isPreflightReport(result)) {
+        return result;
+      }
+    } catch (error) {
+      console.warn(`PDF engine preflight failed at ${endpoint}`, error);
+    }
+  }
+  const validation = await tryValidateWithEngine(bytes);
+  if (!validation) {
+    return null;
+  }
+  return {
+    ok: validation.ok,
+    warnings: validation.errors.length
+      ? validation.errors
+      : ["전체 사전 검사 endpoint를 사용할 수 없어 구조 검증만 실행했습니다."],
+    pageCount: validation.pageCount,
+    metadataPresent: false,
+    xmpPresent: false,
+    embeddedFileCount: 0,
+    javascriptCount: 0,
+    formFieldCount: 0,
+    fontCount: 0,
+  };
+}
+
 async function buildExportPdfBytes(): Promise<Uint8Array> {
   if (!originalBytes || !pdfDocument) {
     throw new Error("PDF is not loaded.");
@@ -3307,6 +3526,7 @@ function isStrictEngineRequired(): boolean {
 function requiresPdfEngineForSafeExport(): boolean {
   return (
     saveMode === "native" ||
+    sanitizeHiddenInfo ||
     Boolean(openPassword) ||
     deletedSourceAnnotations.length > 0 ||
     annotations.some((annotation) => {
@@ -3399,6 +3619,16 @@ function buildEnginePayload(bytes: Uint8Array): EnginePayload {
       annotationMode: saveMode,
       redactionMode,
       flattenForms: false,
+      sanitize: sanitizeHiddenInfo,
+      sanitizeOptions: {
+        metadata: true,
+        xmlMetadata: true,
+        embeddedFiles: true,
+        javascript: true,
+        links: true,
+        thumbnails: true,
+        resetFormFields: false,
+      },
       validate: true,
     },
   };
@@ -3601,6 +3831,7 @@ function annotationToEngineOperation(annotation: Annotation, pageIndex: number):
       fieldValue: annotation.fieldValue,
       checked: annotation.checked,
       exportValue: annotation.exportValue,
+      options: annotation.options,
     };
   }
 
@@ -3732,6 +3963,24 @@ function isExportValidation(value: unknown): value is ExportValidation {
     typeof candidate.pageCount === "number" &&
     typeof candidate.encrypted === "boolean" &&
     Array.isArray(candidate.errors)
+  );
+}
+
+function isPreflightReport(value: unknown): value is PreflightReport {
+  if (typeof value !== "object" || value === null) {
+    return false;
+  }
+  const candidate = value as Record<string, unknown>;
+  return (
+    typeof candidate.ok === "boolean" &&
+    Array.isArray(candidate.warnings) &&
+    typeof candidate.pageCount === "number" &&
+    typeof candidate.metadataPresent === "boolean" &&
+    typeof candidate.xmpPresent === "boolean" &&
+    typeof candidate.embeddedFileCount === "number" &&
+    typeof candidate.javascriptCount === "number" &&
+    typeof candidate.formFieldCount === "number" &&
+    typeof candidate.fontCount === "number"
   );
 }
 
@@ -4132,6 +4381,7 @@ function makeSnapshot(): Snapshot {
     documentMetadata: { ...documentMetadata },
     saveMode,
     redactionMode,
+    sanitizeHiddenInfo,
     deletedSourceAnnotations: deletedSourceAnnotations.map((annotation) => ({ ...annotation })),
   };
 }
@@ -4143,6 +4393,7 @@ function applySnapshot(snapshot: Snapshot): void {
   documentMetadata = { ...snapshot.documentMetadata };
   saveMode = snapshot.saveMode;
   redactionMode = snapshot.redactionMode;
+  sanitizeHiddenInfo = snapshot.sanitizeHiddenInfo ?? false;
   deletedSourceAnnotations = snapshot.deletedSourceAnnotations.map((annotation) => ({ ...annotation }));
   selectedId = null;
 }

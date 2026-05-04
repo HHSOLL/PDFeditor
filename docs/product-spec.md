@@ -32,8 +32,12 @@ without broken layout or hidden stale data.
 - Flattened and native annotation export where safe.
 - Page reorder, duplicate, rotate, extract, and mixed page sizes.
 - Password-aware open/extract/apply flow.
-- AcroForm text field and checkbox fill/save; engine flatten is supported by
-  contract tests.
+- AcroForm text field, checkbox, radio button, combo box, and list box
+  fill/save; engine flatten is supported by contract tests.
+- Hidden-info sanitization for metadata, XMP, embedded files,
+  JavaScript/actions, links/actions, thumbnails, and optional form-value reset.
+- Basic preflight report for hidden data, page boxes, forms, fonts, images,
+  drawings, annotations, and widgets.
 
 ## Explicitly Limited Until Implemented
 
@@ -46,6 +50,7 @@ without broken layout or hidden stale data.
 - Certificate digital signatures.
 - XFA forms and advanced AcroForm scripts/calculations.
 - PDF/A/PDF/X preflight fixups.
+- Full hidden-layer/comment/search-index/unreferenced-object sanitizer coverage.
 - PDF/UA accessibility repair.
 
 ## Release Gate

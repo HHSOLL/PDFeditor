@@ -5,6 +5,7 @@ export type AnnotationType = Tool | "image" | "formField";
 export type EngineOperationType = AnnotationType | "flowSlice" | "deleteAnnotation" | "deleteImage";
 export type SaveMode = "flatten" | "native";
 export type RedactionMode = "textOnly" | "visualArea" | "imagesAndText";
+export type FormFieldType = "text" | "checkbox" | "radio" | "combo" | "list";
 
 export interface PageItem {
   id: string;
@@ -72,10 +73,11 @@ export interface PenAnnotation extends AnnotationBase {
 export interface FormFieldAnnotation extends AnnotationBase {
   type: "formField";
   fieldName: string;
-  fieldType: "text" | "checkbox";
+  fieldType: FormFieldType;
   fieldValue: string;
   checked?: boolean;
   exportValue?: string;
+  options?: string[];
 }
 
 export type BoxAnnotation = AnnotationBase & {
@@ -91,6 +93,7 @@ export interface Snapshot {
   documentMetadata: DocumentMetadata;
   saveMode: SaveMode;
   redactionMode: RedactionMode;
+  sanitizeHiddenInfo: boolean;
   deletedSourceAnnotations: SourceAnnotationRef[];
 }
 
@@ -208,6 +211,7 @@ export interface EngineOperation {
   fieldValue?: string;
   checked?: boolean;
   exportValue?: string;
+  options?: string[];
 }
 
 export interface EngineSourceText {
@@ -234,6 +238,16 @@ export interface EnginePayload {
     annotationMode: SaveMode;
     redactionMode: RedactionMode;
     flattenForms?: boolean;
+    sanitize?: boolean;
+    sanitizeOptions?: {
+      metadata?: boolean;
+      xmlMetadata?: boolean;
+      embeddedFiles?: boolean;
+      javascript?: boolean;
+      links?: boolean;
+      thumbnails?: boolean;
+      resetFormFields?: boolean;
+    };
     validate: boolean;
   };
 }

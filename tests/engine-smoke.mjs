@@ -89,6 +89,15 @@ try {
   if (validation.annotationCount < 2 || validation.textLength < nativeModeKoreanText.length) {
     throw new Error(`engine validation did not report annotation/text metrics: ${JSON.stringify(validation)}`);
   }
+  const preflightResponse = await fetch("http://127.0.0.1:8799/api/pdf/preflight", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ pdfBase64: result.pdfBase64 }),
+  });
+  const preflight = await preflightResponse.json();
+  if (!preflight.validation?.ok || preflight.pageCount !== 1 || !Array.isArray(preflight.pages)) {
+    throw new Error(`engine preflight failed: ${JSON.stringify(preflight)}`);
+  }
   const encryptedExtractResponse = await fetch("http://127.0.0.1:8799/api/pdf/extract", {
     method: "POST",
     headers: { "content-type": "application/json" },

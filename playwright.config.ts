@@ -1,6 +1,7 @@
 import { defineConfig, devices } from "@playwright/test";
 
 const isCi = Boolean(process.env.CI);
+const reuseServers = process.env.PLAYWRIGHT_REUSE_SERVER === "1" && !isCi;
 
 export default defineConfig({
   testDir: "./tests",
@@ -25,13 +26,13 @@ export default defineConfig({
     {
       command: "npm run engine:serve",
       url: "http://127.0.0.1:8787/api/health",
-      reuseExistingServer: !isCi,
+      reuseExistingServer: reuseServers,
       timeout: 30_000,
     },
     {
       command: "npm run dev -- --port 5173",
       url: "http://127.0.0.1:5173",
-      reuseExistingServer: !isCi,
+      reuseExistingServer: reuseServers,
       timeout: 30_000,
     },
   ],
