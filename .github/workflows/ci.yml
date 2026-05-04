@@ -1,0 +1,47 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install Node dependencies
+        run: npm ci
+
+      - name: Install Python engine dependencies
+        run: python3 -m pip install -r engine/requirements.txt
+
+      - name: Install Playwright browser
+        run: npx playwright install --with-deps chromium
+
+      - name: Build
+        run: npm run build
+
+      - name: Engine smoke tests
+        run: npm run test:engine
+
+      - name: End-to-end tests
+        run: npm run test:e2e -- --reporter=list
+
+      - name: Audit
+        run: npm audit --audit-level=moderate

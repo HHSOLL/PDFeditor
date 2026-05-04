@@ -7,12 +7,14 @@ import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
 const root = process.cwd();
 const workDir = path.join(root, "tmp", "engine-smoke");
 const inputPath = path.join(workDir, "input.pdf");
+const encryptedInputPath = path.join(workDir, "encrypted-input.pdf");
 const cliOutputPath = path.join(workDir, "cli-output.pdf");
 const apiOutputPath = path.join(workDir, "api-output.pdf");
 const opsPath = path.join(workDir, "ops.json");
 const renderPath = path.join(workDir, "api-output.png");
 const enginePath = path.join(root, "engine", "pdf_engine.py");
 const replacementText = "상용 엔진 수정 완료";
+const nativeModeKoreanText = "네이티브 모드 한글 텍스트";
 const enginePayload = {
   operations: createOperations(),
   metadata: {
@@ -25,6 +27,7 @@ const enginePayload = {
   },
   saveOptions: {
     annotationMode: "native",
+    redactionMode: "textOnly",
     validate: true,
   },
 };
@@ -32,6 +35,7 @@ const enginePayload = {
 await fs.rm(workDir, { force: true, recursive: true });
 await fs.mkdir(workDir, { recursive: true });
 await createSamplePdf(inputPath);
+await createEncryptedPdf(inputPath, encryptedInputPath, "secret");
 await fs.writeFile(opsPath, JSON.stringify(enginePayload, null, 2));
 
 await runProcess("python3", [
@@ -82,6 +86,27 @@ try {
   if (!validation.ok || validation.pageCount !== 1) {
     throw new Error(`engine validation failed: ${JSON.stringify(validation)}`);
   }
+  if (validation.annotationCount < 2 || validation.textLength < nativeModeKoreanText.length) {
+    throw new Error(`engine validation did not report annotation/text metrics: ${JSON.stringify(validation)}`);
+  }
+  const encryptedExtractResponse = await fetch("http://127.0.0.1:8799/api/pdf/extract", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      pdfBase64: await fs.readFile(encryptedInputPath, "base64"),
+      password: "secret",
+    }),
+  });
+  if (!encryptedExtractResponse.ok) {
+    throw new Error(`encrypted extract returned ${encryptedExtractResponse.status}`);
+  }
+  const encryptedExtract = await encryptedExtractResponse.json();
+  const encryptedText = encryptedExtract.pages
+    .flatMap((page) => page.spans.map((span) => span.text))
+    .join(" ");
+  if (!encryptedText.includes("Original contract title")) {
+    throw new Error(`password-aware extract failed: ${encryptedText}`);
+  }
   await renderFirstPage(apiOutputPath, renderPath);
   const rendered = await fs.stat(renderPath);
   if (rendered.size < 1000) {
@@ -110,6 +135,21 @@ async function createSamplePdf(filePath) {
   });
   page.drawText("Amount: $1,200", { x: 72, y: 610, size: 14, font });
   await fs.writeFile(filePath, await document.save());
+}
+
+async function createEncryptedPdf(inputPath, outputPath, password) {
+  await runProcess("python3", [
+    "-c",
+    [
+      "import fitz, sys",
+      "doc = fitz.open(sys.argv[1])",
+      "doc.save(sys.argv[2], encryption=fitz.PDF_ENCRYPT_AES_256, user_pw=sys.argv[3], owner_pw=sys.argv[3])",
+      "doc.close()",
+    ].join("; "),
+    inputPath,
+    outputPath,
+    password,
+  ]);
 }
 
 function createOperations() {
@@ -167,6 +207,19 @@ function createOperations() {
       opacity: 1,
       strokeWidth: 1.5,
     },
+    {
+      type: "text",
+      pageIndex: 0,
+      x: 72 / 612,
+      y: 188 / 792,
+      width: 250 / 612,
+      height: 34 / 792,
+      text: nativeModeKoreanText,
+      fontSize: 14,
+      color: "#172026",
+      opacity: 1,
+      strokeWidth: 1,
+    },
   ];
 }
 
@@ -178,6 +231,9 @@ async function assertExtractedText(filePath) {
     .join(" ");
   if (!text.includes(replacementText)) {
     throw new Error(`replacement text was not extracted from ${filePath}: ${text}`);
+  }
+  if (!text.includes(nativeModeKoreanText)) {
+    throw new Error(`native-mode Korean fallback text was not extracted from ${filePath}: ${text}`);
   }
   if (text.includes("Original contract title")) {
     throw new Error(`original text was still extractable from ${filePath}: ${text}`);

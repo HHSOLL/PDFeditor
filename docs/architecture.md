@@ -7,7 +7,7 @@ PDF Studio is split into three runtime layers.
 `src/main.ts` owns the current browser app:
 
 - PDF.js renders pages and extracts text maps.
-- The editor model stores page items, annotations, metadata, save mode, and undo/redo snapshots.
+- The editor model stores page items, annotations, metadata, save mode, redaction policy, and undo/redo snapshots.
 - The render layer, source text layer, source mask layer, flow slice layer, and editable overlay layer are kept separate.
 - Export payloads are serialized in normalized page coordinates.
 
@@ -32,9 +32,10 @@ It keeps the browser app isolated from Python/PyMuPDF process execution and give
 - redaction-backed text replacement
 - text, image, shape, ink insertion
 - flow slice capture and reinsertion
-- native annotation mode for text boxes, highlights, rectangles, and ink
+- native annotation mode for safe text boxes, highlights, rectangles, and ink
+- CJK text fallback to flattened embedded-font content when native FreeText would be unsafe
 - metadata write
-- output validation with optional `qpdf --check` when qpdf is installed
+- output validation with PDF.js, PyMuPDF metrics, and optional `qpdf --check` when qpdf is installed
 
 ## Design Rules
 

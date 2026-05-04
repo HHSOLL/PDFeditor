@@ -62,7 +62,8 @@ const server = createServer(async (request, response) => {
         sendJson(response, 400, { error: "pdfBase64 is required" });
         return;
       }
-      const result = await runEngine(["extract-stdin"], { pdfBase64 });
+      const password = String(payload.password || "");
+      const result = await runEngine(["extract-stdin"], { pdfBase64, password });
       sendJson(response, 200, result);
       return;
     }
@@ -144,7 +145,11 @@ async function runExtract(payload) {
     await fs.writeFile(inputPath, Buffer.from(String(payload.pdfBase64), "base64"));
   });
   try {
-    const output = await runEngine(["extract", "--input", inputPath], {});
+    const args = ["extract", "--input", inputPath];
+    if (payload.password) {
+      args.push("--password", String(payload.password));
+    }
+    const output = await runEngine(args, {});
     return output;
   } finally {
     await import("node:fs/promises").then((fs) => fs.rm(inputPath, { force: true }));

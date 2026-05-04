@@ -54,6 +54,7 @@ class Operation(TypedDict, total=False):
 
 class SaveOptions(TypedDict, total=False):
     annotationMode: str
+    redactionMode: str
     validate: bool
 
 
@@ -69,6 +70,7 @@ def main() -> int:
 
     extract_parser = subparsers.add_parser("extract", help="Extract editable text spans")
     extract_parser.add_argument("--input", required=True)
+    extract_parser.add_argument("--password", default="")
 
     apply_parser = subparsers.add_parser("apply", help="Apply edit operations")
     apply_parser.add_argument("--input")
@@ -86,6 +88,7 @@ def main() -> int:
     args = parser.parse_args()
     if args.command == "extract":
         with fitz.open(args.input) as document:
+            authenticate_if_needed(document, args.password)
             write_json(extract_document(document), sys.stdout)
         return 0
 
@@ -198,7 +201,7 @@ def apply_operations(
             page = output[page_index]
             metrics = PageMetrics(page.rect.width, page.rect.height)
             flow_slice_images = render_flow_slice_images(page, page_operations, metrics)
-            apply_redaction_phase(page, page_operations, metrics)
+            apply_redaction_phase(page, page_operations, metrics, save_options)
             apply_insert_phase(page, page_operations, metrics, font_path, flow_slice_images, save_options)
 
         apply_metadata(output, payload.get("metadata"))
@@ -219,10 +222,14 @@ def authenticate_if_needed(document: fitz.Document, password: str) -> None:
 
 def normalize_save_options(value: Any) -> SaveOptions:
     if not isinstance(value, dict):
-        return {"annotationMode": "flatten", "validate": True}
+        return {"annotationMode": "flatten", "redactionMode": "textOnly", "validate": True}
     mode = str(value.get("annotationMode", "flatten"))
+    redaction_mode = str(value.get("redactionMode", "textOnly"))
+    if redaction_mode not in {"textOnly", "visualArea", "imagesAndText"}:
+        redaction_mode = "textOnly"
     return {
         "annotationMode": "native" if mode == "native" else "flatten",
+        "redactionMode": redaction_mode,
         "validate": bool(value.get("validate", True)),
     }
 
@@ -292,6 +299,7 @@ def apply_redaction_phase(
     page: fitz.Page,
     operations: list[Operation],
     metrics: PageMetrics,
+    save_options: SaveOptions,
 ) -> None:
     has_redactions = False
     for operation in operations:
@@ -320,11 +328,21 @@ def apply_redaction_phase(
             has_redactions = True
 
     if has_redactions:
+        image_policy, graphics_policy = redaction_policy(save_options)
         page.apply_redactions(
-            images=fitz.PDF_REDACT_IMAGE_NONE,
-            graphics=fitz.PDF_REDACT_LINE_ART_NONE,
+            images=image_policy,
+            graphics=graphics_policy,
             text=fitz.PDF_REDACT_TEXT_REMOVE,
         )
+
+
+def redaction_policy(save_options: SaveOptions) -> tuple[int, int]:
+    mode = save_options.get("redactionMode", "textOnly")
+    if mode == "visualArea":
+        return fitz.PDF_REDACT_IMAGE_PIXELS, fitz.PDF_REDACT_LINE_ART_REMOVE_IF_TOUCHED
+    if mode == "imagesAndText":
+        return fitz.PDF_REDACT_IMAGE_REMOVE, fitz.PDF_REDACT_LINE_ART_REMOVE_IF_TOUCHED
+    return fitz.PDF_REDACT_IMAGE_NONE, fitz.PDF_REDACT_LINE_ART_NONE
 
 
 def apply_insert_phase(
@@ -339,7 +357,7 @@ def apply_insert_phase(
     native_annotations = save_options.get("annotationMode") == "native"
     for operation in operations:
         op_type = operation["type"]
-        if native_annotations and is_native_annotation_candidate(operation):
+        if native_annotations and is_native_annotation_candidate(operation, font_path):
             insert_native_annotation(page, operation, metrics, font_path)
             continue
         if op_type == "text":
@@ -358,8 +376,10 @@ def apply_insert_phase(
             insert_image(page, operation, metrics)
 
 
-def is_native_annotation_candidate(operation: Operation) -> bool:
+def is_native_annotation_candidate(operation: Operation, font_path: Path) -> bool:
     if operation["type"] == "text" and isinstance(operation.get("eraseOriginal"), dict):
+        return False
+    if operation["type"] == "text" and choose_engine_font(operation, str(operation.get("text", "")), font_path) == "pdfeditfont":
         return False
     return operation["type"] in {"text", "highlight", "rect", "pen"}
 
@@ -555,13 +575,19 @@ def validate_pdf_bytes(pdf_bytes: bytes) -> dict[str, Any]:
     errors: list[str] = []
     page_count = 0
     encrypted = False
+    annotation_count = 0
+    text_length = 0
+    page_sizes: list[dict[str, float]] = []
     try:
         with fitz.open(stream=pdf_bytes, filetype="pdf") as document:
             encrypted = bool(document.needs_pass)
             page_count = document.page_count if not encrypted else 0
             if not encrypted:
                 for page_index in range(document.page_count):
-                    document.load_page(page_index)
+                    page = document.load_page(page_index)
+                    page_sizes.append({"width": page.rect.width, "height": page.rect.height})
+                    annotation_count += len(list(page.annots() or []))
+                    text_length += len(page.get_text("text"))
     except Exception as exc:  # noqa: BLE001 - validation reports diagnostics instead of crashing
         errors.append(str(exc))
 
@@ -584,6 +610,9 @@ def validate_pdf_bytes(pdf_bytes: bytes) -> dict[str, Any]:
         "ok": not errors,
         "pageCount": page_count,
         "encrypted": encrypted,
+        "annotationCount": annotation_count,
+        "textLength": text_length,
+        "pageSizes": page_sizes,
         "qpdfChecked": qpdf_checked,
         "errors": errors,
     }

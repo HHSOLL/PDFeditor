@@ -19,7 +19,9 @@ It is designed around a real save pipeline, not screenshot export:
 - Password-protected PDF open flow
 - Document metadata editing
 - Flattened export mode and native PDF annotation export mode
-- PyMuPDF backend with true redaction and PDF structure validation endpoint
+- Redaction policy modes for text-only removal, visual-area cleanup, or image-and-text removal
+- PyMuPDF backend with true redaction, password-aware extraction, and PDF structure validation endpoint
+- CI-ready Playwright configuration that starts the Vite app and engine server automatically
 
 ## Setup
 
@@ -30,7 +32,7 @@ npm run engine:install
 
 ## Development
 
-Run the web app and PDF engine:
+Run the web app and PDF engine manually:
 
 ```bash
 npm run dev
@@ -38,6 +40,9 @@ npm run engine:serve
 ```
 
 Open the app at `http://127.0.0.1:5173/`.
+
+`npm run test:e2e` starts both servers through `playwright.config.ts`, so the
+end-to-end suite is reproducible from a clean shell.
 
 ## Verification
 

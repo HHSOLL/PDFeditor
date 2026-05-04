@@ -4,19 +4,20 @@ The export path is designed to preserve PDF behavior instead of rasterizing the 
 
 ## Browser Flow
 
-1. Build an engine payload from current page order, rotations, metadata, save mode, annotations, and source text edits.
+1. Build an engine payload from current page order, rotations, metadata, save mode, redaction policy, annotations, and source text edits.
 2. Send the payload to `/api/pdf/apply`.
 3. If the engine succeeds, receive edited PDF bytes.
 4. Re-open the exported PDF with PDF.js and check the expected page count.
-5. Download only after validation passes.
-6. If the engine is unavailable, fall back to the browser `pdf-lib` writer for basic operations.
+5. Ask the engine validation endpoint for PyMuPDF/qpdf metrics when available.
+6. Download only after validation passes.
+7. If the engine is unavailable, fall back to the browser `pdf-lib` writer for basic operations.
 
 ## Engine Flow
 
 1. Open the source PDF and authenticate when a password is provided.
 2. Copy requested source pages into the output document.
 3. Capture flow slice images before redaction.
-4. Apply redaction for source text replacement, redaction boxes, and moved flow slices.
+4. Apply redaction for source text replacement, redaction boxes, and moved flow slices using the selected redaction policy.
 5. Insert replacement text, images, shapes, ink, and flow slices.
 6. In native mode, write supported user annotations as PDF annotation objects.
 7. Write metadata.
@@ -24,7 +25,7 @@ The export path is designed to preserve PDF behavior instead of rasterizing the 
 
 ## Validation
 
-`engine/pdf_engine.py validate` and `/api/pdf/validate` open the produced PDF with PyMuPDF, load every page, and optionally run `qpdf --check` when `qpdf` exists on the machine.
+`engine/pdf_engine.py validate` and `/api/pdf/validate` open the produced PDF with PyMuPDF, load every page, count annotations, collect page sizes, check extractable text length, and optionally run `qpdf --check` when `qpdf` exists on the machine.
 
 The browser also validates exported bytes with PDF.js before presenting the download.
 
@@ -32,3 +33,10 @@ The browser also validates exported bytes with PDF.js before presenting the down
 
 - `flatten`: writes visible edits into page content streams.
 - `native`: stores new text boxes, highlights, rectangles, and ink as PDF annotations when safe. Source text replacement and redaction remain destructive content edits.
+- In native mode, CJK text boxes are flattened with the embedded editor font instead of being saved as unsupported Base14 FreeText annotations.
+
+## Redaction Policies
+
+- `textOnly`: removes extractable text under the target area and keeps image/vector content unchanged.
+- `visualArea`: removes extractable text and pixel-cleans touched image/vector areas.
+- `imagesAndText`: removes extractable text and removes touched image/vector content.

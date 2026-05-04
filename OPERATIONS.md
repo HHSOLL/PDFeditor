@@ -8,6 +8,7 @@
   - `GET /api/health`
   - `POST /api/pdf/apply`
   - `POST /api/pdf/extract`
+  - `POST /api/pdf/validate`
 
 The browser keeps the interactive editor model, then serializes normalized page
 and annotation operations to the engine. If the engine API is unavailable during
@@ -32,7 +33,8 @@ npm run engine:serve
 ```
 
 The Vite app at `http://127.0.0.1:5173/` will call the engine API at
-`http://127.0.0.1:8787/api/pdf/apply`.
+`http://127.0.0.1:8787/api/pdf/apply` and validation API at
+`http://127.0.0.1:8787/api/pdf/validate`.
 
 ## Verification
 
@@ -46,7 +48,12 @@ npm audit --audit-level=moderate
 `test:engine` verifies both the Python CLI engine and the Node HTTP API:
 it replaces existing PDF text, confirms the original text is no longer
 extractable, confirms the Korean replacement is extractable, and renders the
-resulting PDF page to a PNG.
+resulting PDF page to a PNG. It also verifies password-aware extraction,
+native-mode Korean text fallback, metadata, annotation metrics, and the
+validation endpoint.
+
+`test:e2e` is backed by `playwright.config.ts`, which starts both the Vite
+server and the PDF engine server automatically.
 
 ## API Contract
 
@@ -56,6 +63,12 @@ resulting PDF page to a PNG.
 {
   "pdfBase64": "<source pdf bytes>",
   "pages": [{ "sourceIndex": 0, "rotation": 0 }],
+  "metadata": { "title": "edited document" },
+  "saveOptions": {
+    "annotationMode": "flatten",
+    "redactionMode": "textOnly",
+    "validate": true
+  },
   "operations": [
     {
       "type": "text",
@@ -77,6 +90,12 @@ Coordinates are normalized with a top-left origin. The engine writes page
 content, not browser-only overlays. Text replacement first applies a PDF
 redaction to remove the original content stream text, then inserts reflowed
 replacement text into the target rectangle.
+
+Redaction policies:
+
+- `textOnly`: remove text content stream data under redaction boxes; do not alter images or line art.
+- `visualArea`: remove text and pixel-clean the visible image/line-art area touched by the redaction.
+- `imagesAndText`: remove text plus touched image and line-art content.
 
 ## Production Gates
 

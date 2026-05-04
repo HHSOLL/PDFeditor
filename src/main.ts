@@ -11,216 +11,40 @@ import {
   type PDFPage,
   type RGB,
 } from "pdf-lib";
+import { base64ToBytes, bytesToBase64 } from "./base64";
+import { clamp, isMostlyHorizontalText, isNumberArray, multiplyMatrix } from "./geometry";
+import { asMetadataString, emptyMetadata } from "./metadata";
+import type {
+  Annotation,
+  BoxAnnotation,
+  DocumentMetadata,
+  DraftState,
+  DragState,
+  EditorFonts,
+  EngineApplyResponse,
+  EngineOperation,
+  EnginePayload,
+  EngineSourceText,
+  ExportValidation,
+  FlowedSourceText,
+  ImageAnnotation,
+  PageFlowSlice,
+  PageItem,
+  PdfTextItem,
+  PdfTextStyle,
+  PenAnnotation,
+  Point,
+  RedactionMode,
+  SaveMode,
+  Snapshot,
+  SourceMask,
+  SourceTextItem,
+  TextAnnotation,
+  Tool,
+} from "./types";
 
 pdfjs.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
 const editorFontUrl = "/fonts/AppleGothic.ttf";
-
-type Tool = "select" | "text" | "highlight" | "rect" | "redact" | "pen";
-type AnnotationType = Tool | "image";
-type EngineOperationType = AnnotationType | "flowSlice";
-type SaveMode = "flatten" | "native";
-
-interface PageItem {
-  id: string;
-  sourceIndex: number;
-  rotation: number;
-}
-
-interface DocumentMetadata {
-  title: string;
-  author: string;
-  subject: string;
-  keywords: string;
-  creator: string;
-  producer: string;
-}
-
-interface Point {
-  x: number;
-  y: number;
-}
-
-interface AnnotationBase {
-  id: string;
-  pageId: string;
-  type: AnnotationType;
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-  color: string;
-  opacity: number;
-  strokeWidth: number;
-}
-
-interface TextAnnotation extends AnnotationBase {
-  type: "text";
-  text: string;
-  fontSize: number;
-  fontFamily?: string;
-  fontName?: string;
-  reflowable?: boolean;
-  sourceTextId?: string;
-  eraseOriginal?: {
-    x: number;
-    y: number;
-    width: number;
-    height: number;
-  };
-}
-
-interface ImageAnnotation extends AnnotationBase {
-  type: "image";
-  dataUrl: string;
-}
-
-interface PenAnnotation extends AnnotationBase {
-  type: "pen";
-  points: Point[];
-}
-
-type BoxAnnotation = AnnotationBase & {
-  type: "highlight" | "rect" | "redact";
-};
-
-type Annotation =
-  | TextAnnotation
-  | ImageAnnotation
-  | PenAnnotation
-  | BoxAnnotation;
-
-interface Snapshot {
-  annotations: Annotation[];
-  pageItems: PageItem[];
-  currentPageId: string | null;
-  documentMetadata: DocumentMetadata;
-  saveMode: SaveMode;
-}
-
-interface DragState {
-  id: string;
-  mode: "move" | "resize";
-  startX: number;
-  startY: number;
-  original: Annotation;
-}
-
-interface DraftState {
-  type: "box" | "pen";
-  tool: Extract<Tool, "highlight" | "rect" | "redact" | "pen">;
-  startX: number;
-  startY: number;
-  points: Point[];
-}
-
-interface SourceTextItem {
-  id: string;
-  pageId: string;
-  text: string;
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-  fontSize: number;
-  fontFamily: string;
-  fontName: string;
-  lineCount: number;
-  reflowable: boolean;
-}
-
-interface SourceMask {
-  id: string;
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-}
-
-interface FlowedSourceText {
-  id: string;
-  item: SourceTextItem;
-  y: number;
-}
-
-interface PageFlowSlice {
-  id: string;
-  pageId: string;
-  x: number;
-  sourceY: number;
-  y: number;
-  width: number;
-  height: number;
-}
-
-interface EditorFonts {
-  korean: PDFFont;
-  latin: PDFFont;
-}
-
-interface EngineOperation {
-  type: EngineOperationType;
-  pageIndex: number;
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-  sourceY?: number;
-  text?: string;
-  fontSize?: number;
-  fontFamily?: string;
-  fontName?: string;
-  color?: string;
-  opacity?: number;
-  strokeWidth?: number;
-  lineHeight?: number;
-  eraseOriginal?: {
-    x: number;
-    y: number;
-    width: number;
-    height: number;
-  };
-  points?: Point[];
-  dataUrl?: string;
-}
-
-interface EngineSourceText {
-  pageIndex: number;
-  sourceTextId: string;
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-  text: string;
-  fontSize: number;
-  fontFamily: string;
-  fontName: string;
-}
-
-interface EnginePayload {
-  pdfBase64: string;
-  password?: string;
-  pages: Array<{ sourceIndex: number; rotation: number }>;
-  operations: EngineOperation[];
-  sourceTexts: EngineSourceText[];
-  metadata: DocumentMetadata;
-  saveOptions: {
-    annotationMode: SaveMode;
-    validate: boolean;
-  };
-}
-
-interface EngineApplyResponse {
-  pdfBase64: string;
-  validation?: ExportValidation;
-}
-
-interface ExportValidation {
-  ok: boolean;
-  pageCount: number;
-  encrypted: boolean;
-  qpdfChecked?: boolean;
-  errors: string[];
-}
 
 const appRoot = requireAppRoot();
 
@@ -233,6 +57,7 @@ let sourceTextItemsByPage = new Map<string, SourceTextItem[]>();
 let pageCanvasSnapshots = new Map<string, string>();
 let documentMetadata: DocumentMetadata = emptyMetadata();
 let saveMode: SaveMode = "flatten";
+let redactionMode: RedactionMode = "textOnly";
 let openPassword = "";
 let currentPageId: string | null = null;
 let selectedId: string | null = null;
@@ -317,17 +142,6 @@ function renderApp(): void {
   renderDocumentName();
   renderWorkspace();
   renderInspector();
-}
-
-function emptyMetadata(): DocumentMetadata {
-  return {
-    title: "",
-    author: "",
-    subject: "",
-    keywords: "",
-    creator: "PDF Studio",
-    producer: "PDF Studio Engine",
-  };
 }
 
 function bindStaticEvents(): void {
@@ -448,6 +262,7 @@ async function loadPdf(file: File): Promise<void> {
   pageCanvasSnapshots = new Map();
   documentMetadata = await readDocumentMetadata(pdfDocument);
   saveMode = "flatten";
+  redactionMode = "textOnly";
   selectedId = null;
   currentPageId = pageItems[0]?.id ?? null;
   await cacheSourceTextItems();
@@ -501,10 +316,6 @@ async function readDocumentMetadata(document: pdfjs.PDFDocumentProxy): Promise<D
   } catch {
     return emptyMetadata();
   }
-}
-
-function asMetadataString(value: unknown): string {
-  return typeof value === "string" ? value : "";
 }
 
 function isPasswordError(error: unknown): boolean {
@@ -1638,6 +1449,14 @@ function documentFields(): string {
         <option value="native"${saveMode === "native" ? " selected" : ""}>Native PDF annotations</option>
       </select>
     </div>
+    <div class="field">
+      <label>가리기 정책</label>
+      <select id="redactionMode">
+        <option value="textOnly"${redactionMode === "textOnly" ? " selected" : ""}>텍스트만 실제 제거</option>
+        <option value="visualArea"${redactionMode === "visualArea" ? " selected" : ""}>보이는 영역 픽셀 제거</option>
+        <option value="imagesAndText"${redactionMode === "imagesAndText" ? " selected" : ""}>이미지와 텍스트 제거</option>
+      </select>
+    </div>
     <details class="metadata-panel">
       <summary>문서 메타데이터</summary>
       <div class="field">
@@ -1728,6 +1547,15 @@ function bindDocumentControls(): void {
   const saveModeField = document.querySelector<HTMLSelectElement>("#saveMode");
   saveModeField?.addEventListener("change", () => {
     saveMode = saveModeField.value === "native" ? "native" : "flatten";
+    commitHistory();
+  });
+  const redactionModeField = document.querySelector<HTMLSelectElement>("#redactionMode");
+  redactionModeField?.addEventListener("change", () => {
+    if (redactionModeField.value === "visualArea" || redactionModeField.value === "imagesAndText") {
+      redactionMode = redactionModeField.value;
+    } else {
+      redactionMode = "textOnly";
+    }
     commitHistory();
   });
 
@@ -2061,9 +1889,9 @@ async function tryExportWithEngine(): Promise<Uint8Array | null> {
   return null;
 }
 
-function buildEngineEndpoints(): string[] {
-  const sameOriginEndpoint = `${window.location.origin}/api/pdf/apply`;
-  const localEngineEndpoint = "http://127.0.0.1:8787/api/pdf/apply";
+function buildEngineEndpoints(apiPath = "/api/pdf/apply"): string[] {
+  const sameOriginEndpoint = `${window.location.origin}${apiPath}`;
+  const localEngineEndpoint = `http://127.0.0.1:8787${apiPath}`;
   const isLocalDevelopment = ["127.0.0.1", "localhost"].includes(window.location.hostname);
   return !isLocalDevelopment || sameOriginEndpoint === localEngineEndpoint
     ? [sameOriginEndpoint]
@@ -2096,6 +1924,7 @@ function buildEnginePayload(bytes: Uint8Array): EnginePayload {
     metadata: documentMetadata,
     saveOptions: {
       annotationMode: saveMode,
+      redactionMode,
       validate: true,
     },
   };
@@ -2250,6 +2079,7 @@ async function validateExportedPdf(bytes: Uint8Array, expectedPageCount: number)
   const errors: string[] = [];
   let pageCount = 0;
   let encrypted = false;
+  let engineValidation: ExportValidation | null = null;
   try {
     const loadingTask = pdfjs.getDocument({ data: bytes.slice() });
     const document = await loadingTask.promise;
@@ -2262,12 +2092,65 @@ async function validateExportedPdf(bytes: Uint8Array, expectedPageCount: number)
     encrypted = isPasswordError(error);
     errors.push(error instanceof Error ? error.message : "exported PDF could not be opened");
   }
+
+  engineValidation = await tryValidateWithEngine(bytes);
+  if (engineValidation) {
+    if (engineValidation.pageCount !== expectedPageCount) {
+      errors.push(`engine page count ${engineValidation.pageCount} != expected ${expectedPageCount}`);
+    }
+    if (!engineValidation.ok) {
+      errors.push(...engineValidation.errors);
+    }
+  }
+
   return {
     ok: errors.length === 0,
     pageCount,
     encrypted,
+    qpdfChecked: engineValidation?.qpdfChecked,
+    annotationCount: engineValidation?.annotationCount,
+    textLength: engineValidation?.textLength,
+    pageSizes: engineValidation?.pageSizes,
     errors,
   };
+}
+
+async function tryValidateWithEngine(bytes: Uint8Array): Promise<ExportValidation | null> {
+  const endpoints = buildEngineEndpoints("/api/pdf/validate");
+  for (const endpoint of endpoints) {
+    try {
+      const response = await fetch(endpoint, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ pdfBase64: bytesToBase64(bytes) }),
+      });
+      if (!response.ok) {
+        continue;
+      }
+      const result: unknown = await response.json();
+      if (isExportValidation(result)) {
+        return result;
+      }
+    } catch (error) {
+      console.warn(`PDF engine validation failed at ${endpoint}`, error);
+    }
+  }
+  return null;
+}
+
+function isExportValidation(value: unknown): value is ExportValidation {
+  if (typeof value !== "object" || value === null) {
+    return false;
+  }
+  const candidate = value as Record<string, unknown>;
+  return (
+    typeof candidate.ok === "boolean" &&
+    typeof candidate.pageCount === "number" &&
+    typeof candidate.encrypted === "boolean" &&
+    Array.isArray(candidate.errors)
+  );
 }
 
 function applyPdfLibMetadata(document: PDFDocument): void {
@@ -2298,25 +2181,6 @@ function downloadPdf(bytes: Uint8Array, message: string): void {
   link.click();
   URL.revokeObjectURL(url);
   showToast(message);
-}
-
-function bytesToBase64(bytes: Uint8Array): string {
-  let binary = "";
-  const chunkSize = 0x8000;
-  for (let offset = 0; offset < bytes.length; offset += chunkSize) {
-    const chunk = bytes.subarray(offset, offset + chunkSize);
-    binary += String.fromCharCode(...chunk);
-  }
-  return window.btoa(binary);
-}
-
-function base64ToBytes(value: string): Uint8Array {
-  const binary = window.atob(value);
-  const bytes = new Uint8Array(binary.length);
-  for (let index = 0; index < binary.length; index += 1) {
-    bytes[index] = binary.charCodeAt(index);
-  }
-  return bytes;
 }
 
 async function copyOriginalPage(
@@ -2663,6 +2527,7 @@ function makeSnapshot(): Snapshot {
     currentPageId,
     documentMetadata: { ...documentMetadata },
     saveMode,
+    redactionMode,
   };
 }
 
@@ -2672,23 +2537,12 @@ function applySnapshot(snapshot: Snapshot): void {
   currentPageId = snapshot.currentPageId;
   documentMetadata = { ...snapshot.documentMetadata };
   saveMode = snapshot.saveMode;
+  redactionMode = snapshot.redactionMode;
   selectedId = null;
 }
 
 function cloneAnnotation<T extends Annotation>(annotation: T): T {
   return JSON.parse(JSON.stringify(annotation)) as T;
-}
-
-interface PdfTextItem {
-  str: string;
-  fontName: string;
-  transform: [number, number, number, number, number, number];
-  width: number;
-  height: number;
-}
-
-interface PdfTextStyle {
-  fontFamily?: string;
 }
 
 function isPdfTextItem(item: unknown): item is PdfTextItem {
@@ -2703,41 +2557,6 @@ function isPdfTextItem(item: unknown): item is PdfTextItem {
     typeof candidate.width === "number" &&
     typeof candidate.height === "number"
   );
-}
-
-function isNumberArray(value: unknown, length: number): value is [
-  number,
-  number,
-  number,
-  number,
-  number,
-  number,
-] {
-  return (
-    Array.isArray(value) &&
-    value.length === length &&
-    value.every((entry) => typeof entry === "number")
-  );
-}
-
-function multiplyMatrix(
-  a: [number, number, number, number, number, number],
-  b: [number, number, number, number, number, number],
-): [number, number, number, number, number, number] {
-  return [
-    a[0] * b[0] + a[2] * b[1],
-    a[1] * b[0] + a[3] * b[1],
-    a[0] * b[2] + a[2] * b[3],
-    a[1] * b[2] + a[3] * b[3],
-    a[0] * b[4] + a[2] * b[5] + a[4],
-    a[1] * b[4] + a[3] * b[5] + a[5],
-  ];
-}
-
-function isMostlyHorizontalText(matrix: [number, number, number, number, number, number]): boolean {
-  const baselineAngle = Math.abs(Math.atan2(matrix[1], matrix[0]));
-  const normalizedAngle = Math.min(baselineAngle, Math.abs(Math.PI - baselineAngle));
-  return normalizedAngle < Math.PI / 12;
 }
 
 function refreshAll(updateInspector = true): void {
@@ -2819,10 +2638,6 @@ function byId<T extends HTMLElement = HTMLElement>(id: string): T {
     throw new Error(`Missing element #${id}`);
   }
   return element as T;
-}
-
-function clamp(value: number, min: number, max: number): number {
-  return Math.min(max, Math.max(min, value));
 }
 
 function escapeHtml(value: string): string {
