@@ -121,3 +121,37 @@ test("edits existing PDF text with auto reflow and exports real PDF text", async
   expect(exportedText).toContain("글씨크기");
   await expect(page.locator(".source-text", { hasText: "Original contract title" })).toHaveCount(0);
 });
+
+test("saves metadata and duplicated pages through the advanced save pipeline", async ({
+  page,
+}) => {
+  const samplePath = path.resolve("tmp/sample-advanced.pdf");
+  const exportedPath = path.resolve("tmp/exported-advanced.pdf");
+  await createSamplePdf(samplePath);
+
+  await page.goto("http://127.0.0.1:5173/");
+  await page
+    .locator('input[type="file"][accept="application/pdf"]')
+    .setInputFiles(samplePath);
+  await expect(page.locator(".page-shell canvas")).toBeVisible();
+
+  await page.locator("#saveMode").selectOption("native");
+  await page.locator(".metadata-panel summary").click();
+  await page.locator("#metaTitle").fill("Advanced PDF Studio Export");
+  await page.locator("#metaTitle").blur();
+  await page.locator("#metaAuthor").fill("HHSOLL");
+  await page.locator("#metaAuthor").blur();
+
+  await page.locator("#duplicatePage").click();
+  await expect(page.locator("#pageCount")).toHaveText("2쪽");
+
+  const downloadPromise = page.waitForEvent("download");
+  await page.getByRole("button", { name: "PDF 내보내기" }).click();
+  const download = await downloadPromise;
+  await download.saveAs(exportedPath);
+
+  const exported = await PDFDocument.load(await fs.readFile(exportedPath));
+  expect(exported.getPageCount()).toBe(2);
+  expect(exported.getTitle()).toBe("Advanced PDF Studio Export");
+  expect(exported.getAuthor()).toBe("HHSOLL");
+});

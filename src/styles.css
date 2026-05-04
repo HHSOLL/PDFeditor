@@ -459,6 +459,26 @@ button {
   resize: vertical;
 }
 
+.metadata-panel {
+  display: grid;
+  gap: 10px;
+  border: 1px solid #dfe5eb;
+  border-radius: 7px;
+  padding: 10px;
+  background: #fff;
+}
+
+.metadata-panel summary {
+  color: #25313b;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.metadata-panel[open] {
+  gap: 12px;
+}
+
 .field-row {
   display: grid;
   grid-template-columns: 1fr 1fr;

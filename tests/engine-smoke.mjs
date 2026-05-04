@@ -13,12 +13,26 @@ const opsPath = path.join(workDir, "ops.json");
 const renderPath = path.join(workDir, "api-output.png");
 const enginePath = path.join(root, "engine", "pdf_engine.py");
 const replacementText = "상용 엔진 수정 완료";
+const enginePayload = {
+  operations: createOperations(),
+  metadata: {
+    title: "PDF Studio Engine Smoke",
+    author: "HHSOLL",
+    subject: "Advanced PDF save pipeline",
+    keywords: "pdf,editor,native annotations",
+    creator: "PDF Studio",
+    producer: "PDF Studio Engine",
+  },
+  saveOptions: {
+    annotationMode: "native",
+    validate: true,
+  },
+};
 
 await fs.rm(workDir, { force: true, recursive: true });
 await fs.mkdir(workDir, { recursive: true });
 await createSamplePdf(inputPath);
-const operations = createOperations();
-await fs.writeFile(opsPath, JSON.stringify({ operations }, null, 2));
+await fs.writeFile(opsPath, JSON.stringify(enginePayload, null, 2));
 
 await runProcess("python3", [
   enginePath,
@@ -31,6 +45,7 @@ await runProcess("python3", [
   cliOutputPath,
 ]);
 await assertExtractedText(cliOutputPath);
+await assertMetadataAndNativeAnnotations(cliOutputPath);
 
 const server = spawn(process.execPath, [path.join(root, "server", "pdf-engine-server.mjs")], {
   cwd: root,
@@ -45,7 +60,7 @@ try {
     body: JSON.stringify({
       pdfBase64: await fs.readFile(inputPath, "base64"),
       pages: [{ sourceIndex: 0, rotation: 0 }],
-      operations,
+      ...enginePayload,
     }),
   });
   if (!response.ok) {
@@ -57,6 +72,16 @@ try {
   }
   await fs.writeFile(apiOutputPath, Buffer.from(result.pdfBase64, "base64"));
   await assertExtractedText(apiOutputPath);
+  await assertMetadataAndNativeAnnotations(apiOutputPath);
+  const validateResponse = await fetch("http://127.0.0.1:8799/api/pdf/validate", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ pdfBase64: result.pdfBase64 }),
+  });
+  const validation = await validateResponse.json();
+  if (!validation.ok || validation.pageCount !== 1) {
+    throw new Error(`engine validation failed: ${JSON.stringify(validation)}`);
+  }
   await renderFirstPage(apiOutputPath, renderPath);
   const rendered = await fs.stat(renderPath);
   if (rendered.size < 1000) {
@@ -156,6 +181,28 @@ async function assertExtractedText(filePath) {
   }
   if (text.includes("Original contract title")) {
     throw new Error(`original text was still extractable from ${filePath}: ${text}`);
+  }
+}
+
+async function assertMetadataAndNativeAnnotations(filePath) {
+  const { stdout } = await runProcess("python3", [
+    "-c",
+    [
+      "import fitz, json, sys",
+      "doc = fitz.open(sys.argv[1])",
+      "page = doc[0]",
+      "annots = list(page.annots() or [])",
+      "print(json.dumps({'title': doc.metadata.get('title', ''), 'annotations': len(annots)}))",
+      "doc.close()",
+    ].join("; "),
+    filePath,
+  ]);
+  const info = JSON.parse(stdout);
+  if (info.title !== "PDF Studio Engine Smoke") {
+    throw new Error(`metadata was not written: ${stdout}`);
+  }
+  if (info.annotations < 2) {
+    throw new Error(`native annotations were not preserved: ${stdout}`);
   }
 }
 

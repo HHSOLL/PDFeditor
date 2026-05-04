@@ -18,11 +18,21 @@ const editorFontUrl = "/fonts/AppleGothic.ttf";
 type Tool = "select" | "text" | "highlight" | "rect" | "redact" | "pen";
 type AnnotationType = Tool | "image";
 type EngineOperationType = AnnotationType | "flowSlice";
+type SaveMode = "flatten" | "native";
 
 interface PageItem {
   id: string;
   sourceIndex: number;
   rotation: number;
+}
+
+interface DocumentMetadata {
+  title: string;
+  author: string;
+  subject: string;
+  keywords: string;
+  creator: string;
+  producer: string;
 }
 
 interface Point {
@@ -83,6 +93,8 @@ interface Snapshot {
   annotations: Annotation[];
   pageItems: PageItem[];
   currentPageId: string | null;
+  documentMetadata: DocumentMetadata;
+  saveMode: SaveMode;
 }
 
 interface DragState {
@@ -186,13 +198,28 @@ interface EngineSourceText {
 
 interface EnginePayload {
   pdfBase64: string;
+  password?: string;
   pages: Array<{ sourceIndex: number; rotation: number }>;
   operations: EngineOperation[];
   sourceTexts: EngineSourceText[];
+  metadata: DocumentMetadata;
+  saveOptions: {
+    annotationMode: SaveMode;
+    validate: boolean;
+  };
 }
 
 interface EngineApplyResponse {
   pdfBase64: string;
+  validation?: ExportValidation;
+}
+
+interface ExportValidation {
+  ok: boolean;
+  pageCount: number;
+  encrypted: boolean;
+  qpdfChecked?: boolean;
+  errors: string[];
 }
 
 const appRoot = requireAppRoot();
@@ -204,6 +231,9 @@ let pageItems: PageItem[] = [];
 let annotations: Annotation[] = [];
 let sourceTextItemsByPage = new Map<string, SourceTextItem[]>();
 let pageCanvasSnapshots = new Map<string, string>();
+let documentMetadata: DocumentMetadata = emptyMetadata();
+let saveMode: SaveMode = "flatten";
+let openPassword = "";
 let currentPageId: string | null = null;
 let selectedId: string | null = null;
 let currentTool: Tool = "select";
@@ -287,6 +317,17 @@ function renderApp(): void {
   renderDocumentName();
   renderWorkspace();
   renderInspector();
+}
+
+function emptyMetadata(): DocumentMetadata {
+  return {
+    title: "",
+    author: "",
+    subject: "",
+    keywords: "",
+    creator: "PDF Studio",
+    producer: "PDF Studio Engine",
+  };
 }
 
 function bindStaticEvents(): void {
@@ -395,8 +436,8 @@ async function loadPdf(file: File): Promise<void> {
   const bytes = new Uint8Array(await file.arrayBuffer());
   originalBytes = bytes;
   fileName = file.name.replace(/\.pdf$/i, "") + "-edited.pdf";
-  const loadingTask = pdfjs.getDocument({ data: bytes.slice() });
-  pdfDocument = await loadingTask.promise;
+  openPassword = "";
+  pdfDocument = await openPdfDocument(bytes);
   pageItems = Array.from({ length: pdfDocument.numPages }, (_, index) => ({
     id: crypto.randomUUID(),
     sourceIndex: index,
@@ -405,6 +446,8 @@ async function loadPdf(file: File): Promise<void> {
   annotations = [];
   sourceTextItemsByPage = new Map();
   pageCanvasSnapshots = new Map();
+  documentMetadata = await readDocumentMetadata(pdfDocument);
+  saveMode = "flatten";
   selectedId = null;
   currentPageId = pageItems[0]?.id ?? null;
   await cacheSourceTextItems();
@@ -414,6 +457,62 @@ async function loadPdf(file: File): Promise<void> {
   await renderWorkspace();
   renderInspector();
   showToast(`${file.name} 파일을 열었습니다.`);
+}
+
+async function openPdfDocument(bytes: Uint8Array): Promise<pdfjs.PDFDocumentProxy> {
+  const loadingTask = pdfjs.getDocument({ data: bytes.slice(), password: openPassword || undefined });
+  loadingTask.onPassword = (updatePassword: (password: string) => void, reason: number) => {
+    const needsPassword = reason === pdfjs.PasswordResponses.NEED_PASSWORD;
+    const promptText = needsPassword
+      ? "암호가 걸린 PDF입니다. 암호를 입력하세요."
+      : "PDF 암호가 맞지 않습니다. 다시 입력하세요.";
+    const password = window.prompt(promptText, "");
+    if (password === null) {
+      updatePassword("");
+      return;
+    }
+    openPassword = password;
+    updatePassword(password);
+  };
+  try {
+    return await loadingTask.promise;
+  } catch (error) {
+    if (isPasswordError(error)) {
+      showToast("PDF 암호가 필요하거나 암호가 올바르지 않습니다.");
+    }
+    throw error;
+  }
+}
+
+async function readDocumentMetadata(document: pdfjs.PDFDocumentProxy): Promise<DocumentMetadata> {
+  try {
+    const raw = await document.getMetadata();
+    const info = typeof raw.info === "object" && raw.info !== null
+      ? raw.info as Record<string, unknown>
+      : {};
+    return {
+      title: asMetadataString(info.Title),
+      author: asMetadataString(info.Author),
+      subject: asMetadataString(info.Subject),
+      keywords: asMetadataString(info.Keywords),
+      creator: asMetadataString(info.Creator) || "PDF Studio",
+      producer: asMetadataString(info.Producer) || "PDF Studio Engine",
+    };
+  } catch {
+    return emptyMetadata();
+  }
+}
+
+function asMetadataString(value: unknown): string {
+  return typeof value === "string" ? value : "";
+}
+
+function isPasswordError(error: unknown): boolean {
+  if (typeof error !== "object" || error === null) {
+    return false;
+  }
+  const name = (error as { name?: unknown }).name;
+  return name === "PasswordException";
 }
 
 function renderDocumentName(): void {
@@ -1475,6 +1574,7 @@ function renderInspector(): void {
   }
 
   const currentIndex = pageItems.findIndex((item) => item.id === currentPageId);
+  const documentControls = documentFields();
   const pageControls = `
     <div class="field">
       <label>현재 페이지</label>
@@ -1482,6 +1582,8 @@ function renderInspector(): void {
         <button id="movePageUp" type="button">앞으로</button>
         <button id="movePageDown" type="button">뒤로</button>
         <button id="rotatePage" type="button">회전</button>
+        <button id="duplicatePage" type="button">복제</button>
+        <button id="extractPage" type="button">추출</button>
         <button id="deletePage" type="button">삭제</button>
       </div>
     </div>
@@ -1490,14 +1592,17 @@ function renderInspector(): void {
 
   if (!selected) {
     body.innerHTML = `
+      ${documentControls}
       ${pageControls}
       <p class="status-line">기존 글씨를 클릭하면 Acrobat처럼 내용과 글씨 크기를 바로 편집할 수 있습니다. 새 글씨는 텍스트 도구로 추가하세요.</p>
     `;
+    bindDocumentControls();
     bindPageControls();
     return;
   }
 
   body.innerHTML = `
+    ${documentControls}
     ${pageControls}
     ${selected.type === "text" ? textFields(selected) : ""}
     ${selected.type !== "image" ? colorField(selected) : ""}
@@ -1519,8 +1624,40 @@ function renderInspector(): void {
       <button id="deleteSelected" type="button">삭제</button>
     </div>
   `;
+  bindDocumentControls();
   bindPageControls();
   bindInspectorFields(selected);
+}
+
+function documentFields(): string {
+  return `
+    <div class="field">
+      <label>저장 방식</label>
+      <select id="saveMode">
+        <option value="flatten"${saveMode === "flatten" ? " selected" : ""}>Flatten content stream</option>
+        <option value="native"${saveMode === "native" ? " selected" : ""}>Native PDF annotations</option>
+      </select>
+    </div>
+    <details class="metadata-panel">
+      <summary>문서 메타데이터</summary>
+      <div class="field">
+        <label>제목</label>
+        <input id="metaTitle" type="text" value="${escapeHtml(documentMetadata.title)}" />
+      </div>
+      <div class="field">
+        <label>작성자</label>
+        <input id="metaAuthor" type="text" value="${escapeHtml(documentMetadata.author)}" />
+      </div>
+      <div class="field">
+        <label>주제</label>
+        <input id="metaSubject" type="text" value="${escapeHtml(documentMetadata.subject)}" />
+      </div>
+      <div class="field">
+        <label>키워드</label>
+        <input id="metaKeywords" type="text" value="${escapeHtml(documentMetadata.keywords)}" />
+      </div>
+    </details>
+  `;
 }
 
 function textFields(annotation: TextAnnotation): string {
@@ -1582,7 +1719,33 @@ function bindPageControls(): void {
   byId("movePageUp").addEventListener("click", () => moveCurrentPage(-1));
   byId("movePageDown").addEventListener("click", () => moveCurrentPage(1));
   byId("rotatePage").addEventListener("click", rotateCurrentPage);
+  byId("duplicatePage").addEventListener("click", duplicateCurrentPage);
+  byId("extractPage").addEventListener("click", () => void extractCurrentPage());
   byId("deletePage").addEventListener("click", deleteCurrentPage);
+}
+
+function bindDocumentControls(): void {
+  const saveModeField = document.querySelector<HTMLSelectElement>("#saveMode");
+  saveModeField?.addEventListener("change", () => {
+    saveMode = saveModeField.value === "native" ? "native" : "flatten";
+    commitHistory();
+  });
+
+  bindMetadataField("metaTitle", "title");
+  bindMetadataField("metaAuthor", "author");
+  bindMetadataField("metaSubject", "subject");
+  bindMetadataField("metaKeywords", "keywords");
+}
+
+function bindMetadataField(id: string, key: keyof DocumentMetadata): void {
+  const input = document.querySelector<HTMLInputElement>(`#${id}`);
+  input?.addEventListener("change", () => {
+    documentMetadata = {
+      ...documentMetadata,
+      [key]: input.value,
+    };
+    commitHistory();
+  });
 }
 
 function bindInspectorFields(annotation: Annotation): void {
@@ -1704,6 +1867,67 @@ function deleteCurrentPage(): void {
   refreshAll();
 }
 
+function duplicateCurrentPage(): void {
+  const index = pageItems.findIndex((item) => item.id === currentPageId);
+  if (index < 0) {
+    return;
+  }
+  const source = pageItems[index];
+  const copy: PageItem = {
+    ...source,
+    id: crypto.randomUUID(),
+  };
+  pageItems.splice(index + 1, 0, copy);
+  cloneSourceTextItemsForPage(source.id, copy.id);
+  const copiedAnnotations = annotations
+    .filter((annotation) => annotation.pageId === source.id)
+    .map((annotation) => {
+      const cloned = cloneAnnotation(annotation);
+      cloned.id = crypto.randomUUID();
+      cloned.pageId = copy.id;
+      if (cloned.type === "text") {
+        delete cloned.sourceTextId;
+        delete cloned.eraseOriginal;
+        cloned.reflowable = false;
+      }
+      return cloned;
+    });
+  annotations.push(...copiedAnnotations);
+  currentPageId = copy.id;
+  selectedId = null;
+  commitHistory();
+  refreshAll();
+}
+
+function cloneSourceTextItemsForPage(sourcePageId: string, targetPageId: string): void {
+  const sourceItems = sourceTextItemsByPage.get(sourcePageId) ?? [];
+  sourceTextItemsByPage.set(
+    targetPageId,
+    sourceItems.map((item, index) => ({
+      ...item,
+      id: `${targetPageId}:block-${index}`,
+      pageId: targetPageId,
+    })),
+  );
+}
+
+async function extractCurrentPage(): Promise<void> {
+  const index = pageItems.findIndex((item) => item.id === currentPageId);
+  if (index < 0) {
+    return;
+  }
+  const editedBytes = await buildExportPdfBytes();
+  await validateExportedPdf(editedBytes, pageItems.length);
+  const source = await PDFDocument.load(editedBytes);
+  const output = await PDFDocument.create();
+  const [page] = await output.copyPages(source, [index]);
+  output.addPage(page);
+  applyPdfLibMetadata(output);
+  const bytes = new Uint8Array(await output.save());
+  await validateExportedPdf(bytes, 1);
+  downloadPdf(bytes, "현재 페이지를 별도 PDF로 추출했습니다.");
+}
+
 function duplicateSelected(): void {
   const selected = selectedAnnotation();
   if (!selected) {
@@ -1766,15 +1990,29 @@ async function exportPdf(): Promise<void> {
     return;
   }
 
+  const bytes = await buildExportPdfBytes();
+  const validation = await validateExportedPdf(bytes, pageItems.length);
+  if (!validation.ok) {
+    showToast(`PDF 검증 실패: ${validation.errors.join(", ")}`);
+    return;
+  }
+  downloadPdf(bytes, "PDF 엔진으로 저장하고 검증했습니다.");
+}
+
+async function buildExportPdfBytes(): Promise<Uint8Array> {
+  if (!originalBytes || !pdfDocument) {
+    throw new Error("PDF is not loaded.");
+  }
+
   const engineBytes = await tryExportWithEngine();
   if (engineBytes) {
-    downloadPdf(engineBytes, "PDF 엔진으로 내보냈습니다.");
-    return;
+    return engineBytes;
   }
 
   const source = await PDFDocument.load(originalBytes);
   const output = await PDFDocument.create();
   output.registerFontkit(fontkit);
+  applyPdfLibMetadata(output);
   const editorFonts = await loadEditorFonts(output);
 
   for (const item of pageItems) {
@@ -1791,7 +2029,7 @@ async function exportPdf(): Promise<void> {
   }
 
   const bytes = await output.save();
-  downloadPdf(new Uint8Array(bytes), "편집된 PDF를 내보냈습니다.");
+  return new Uint8Array(bytes);
 }
 
 async function tryExportWithEngine(): Promise<Uint8Array | null> {
@@ -1848,12 +2086,18 @@ function buildEnginePayload(bytes: Uint8Array): EnginePayload {
 
   return {
     pdfBase64: bytesToBase64(bytes),
+    password: openPassword || undefined,
     pages: pageItems.map((item) => ({
       sourceIndex: item.sourceIndex,
       rotation: item.rotation,
     })),
     operations: [...flowSliceOperations, ...annotationOperations, ...flowOperations],
     sourceTexts: buildEngineSourceTexts(pageIndexById),
+    metadata: documentMetadata,
+    saveOptions: {
+      annotationMode: saveMode,
+      validate: true,
+    },
   };
 }
 
@@ -2000,6 +2244,48 @@ function isEngineApplyResponse(value: unknown): value is EngineApplyResponse {
     value !== null &&
     typeof (value as Record<string, unknown>).pdfBase64 === "string"
   );
+}
+
+async function validateExportedPdf(bytes: Uint8Array, expectedPageCount: number): Promise<ExportValidation> {
+  const errors: string[] = [];
+  let pageCount = 0;
+  let encrypted = false;
+  try {
+    const loadingTask = pdfjs.getDocument({ data: bytes.slice() });
+    const document = await loadingTask.promise;
+    pageCount = document.numPages;
+    if (pageCount !== expectedPageCount) {
+      errors.push(`page count ${pageCount} != expected ${expectedPageCount}`);
+    }
+    await document.destroy();
+  } catch (error) {
+    encrypted = isPasswordError(error);
+    errors.push(error instanceof Error ? error.message : "exported PDF could not be opened");
+  }
+  return {
+    ok: errors.length === 0,
+    pageCount,
+    encrypted,
+    errors,
+  };
+}
+
+function applyPdfLibMetadata(document: PDFDocument): void {
+  const { title, author, subject, keywords, creator, producer } = documentMetadata;
+  if (title) {
+    document.setTitle(title);
+  }
+  if (author) {
+    document.setAuthor(author);
+  }
+  if (subject) {
+    document.setSubject(subject);
+  }
+  if (keywords) {
+    document.setKeywords(keywords.split(",").map((keyword) => keyword.trim()).filter(Boolean));
+  }
+  document.setCreator(creator || "PDF Studio");
+  document.setProducer(producer || "PDF Studio Engine");
 }
 
 function downloadPdf(bytes: Uint8Array, message: string): void {
@@ -2375,6 +2661,8 @@ function makeSnapshot(): Snapshot {
     annotations: annotations.map(cloneAnnotation),
     pageItems: pageItems.map((item) => ({ ...item })),
     currentPageId,
+    documentMetadata: { ...documentMetadata },
+    saveMode,
   };
 }
 
@@ -2382,6 +2670,8 @@ function applySnapshot(snapshot: Snapshot): void {
   annotations = snapshot.annotations.map(cloneAnnotation);
   pageItems = snapshot.pageItems.map((item) => ({ ...item }));
   currentPageId = snapshot.currentPageId;
+  documentMetadata = { ...snapshot.documentMetadata };
+  saveMode = snapshot.saveMode;
   selectedId = null;
 }
 

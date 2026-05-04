@@ -12,7 +12,10 @@ import argparse
 import base64
 import io
 import json
+import shutil
+import subprocess
 import sys
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable, Literal, TypedDict
@@ -49,6 +52,11 @@ class Operation(TypedDict, total=False):
     fontName: str
 
 
+class SaveOptions(TypedDict, total=False):
+    annotationMode: str
+    validate: bool
+
+
 @dataclass(frozen=True)
 class PageMetrics:
     width: float
@@ -70,6 +78,11 @@ def main() -> int:
     apply_parser.add_argument("--stdout", action="store_true")
     apply_parser.add_argument("--font", default=str(DEFAULT_FONT))
 
+    validate_parser = subparsers.add_parser("validate", help="Validate PDF bytes")
+    validate_parser.add_argument("--input")
+    validate_parser.add_argument("--stdin", action="store_true")
+    validate_parser.add_argument("--stdout", action="store_true")
+
     args = parser.parse_args()
     if args.command == "extract":
         with fitz.open(args.input) as document:
@@ -83,6 +96,9 @@ def main() -> int:
             ops_payload = {
                 "pages": payload.get("pages"),
                 "operations": payload.get("operations", []),
+                "metadata": payload.get("metadata"),
+                "saveOptions": payload.get("saveOptions", {}),
+                "password": payload.get("password", ""),
             }
         else:
             if not args.input or not args.ops:
@@ -98,6 +114,21 @@ def main() -> int:
                 raise SystemExit("--output is required without --stdout")
             Path(args.output).parent.mkdir(parents=True, exist_ok=True)
             Path(args.output).write_bytes(edited)
+        return 0
+
+    if args.command == "validate":
+        if args.stdin:
+            payload = json.load(sys.stdin)
+            pdf_bytes = base64.b64decode(payload["pdfBase64"])
+        else:
+            if not args.input:
+                raise SystemExit("--input is required without --stdin")
+            pdf_bytes = Path(args.input).read_bytes()
+        result = validate_pdf_bytes(pdf_bytes)
+        if args.stdout:
+            write_json(result, sys.stdout)
+        else:
+            write_json(result, sys.stdout)
         return 0
 
     raise AssertionError(f"Unhandled command: {args.command}")
@@ -152,6 +183,7 @@ def apply_operations(
     source = fitz.open(stream=pdf_bytes, filetype="pdf")
     output = fitz.open()
     try:
+        authenticate_if_needed(source, str(payload.get("password", "")))
         pages = normalize_pages(payload.get("pages"), source.page_count)
         for page_spec in pages:
             source_index = clamp_int(page_spec["sourceIndex"], 0, source.page_count - 1)
@@ -160,20 +192,57 @@ def apply_operations(
                 output[-1].set_rotation(int(page_spec["rotation"]) % 360)
 
         operations = validate_operations(payload.get("operations", []), output.page_count)
+        save_options = normalize_save_options(payload.get("saveOptions"))
         operations_by_page = group_operations(operations)
         for page_index, page_operations in operations_by_page.items():
             page = output[page_index]
             metrics = PageMetrics(page.rect.width, page.rect.height)
             flow_slice_images = render_flow_slice_images(page, page_operations, metrics)
             apply_redaction_phase(page, page_operations, metrics)
-            apply_insert_phase(page, page_operations, metrics, font_path, flow_slice_images)
+            apply_insert_phase(page, page_operations, metrics, font_path, flow_slice_images, save_options)
 
+        apply_metadata(output, payload.get("metadata"))
         buffer = io.BytesIO()
         output.save(buffer, garbage=4, deflate=True, clean=True)
         return buffer.getvalue()
     finally:
         output.close()
         source.close()
+
+
+def authenticate_if_needed(document: fitz.Document, password: str) -> None:
+    if not document.needs_pass:
+        return
+    if not password or not document.authenticate(password):
+        raise ValueError("PDF password is required or incorrect")
+
+
+def normalize_save_options(value: Any) -> SaveOptions:
+    if not isinstance(value, dict):
+        return {"annotationMode": "flatten", "validate": True}
+    mode = str(value.get("annotationMode", "flatten"))
+    return {
+        "annotationMode": "native" if mode == "native" else "flatten",
+        "validate": bool(value.get("validate", True)),
+    }
+
+
+def apply_metadata(document: fitz.Document, value: Any) -> None:
+    if not isinstance(value, dict):
+        return
+    metadata = document.metadata or {}
+    for source_key, target_key in {
+        "title": "title",
+        "author": "author",
+        "subject": "subject",
+        "keywords": "keywords",
+        "creator": "creator",
+        "producer": "producer",
+    }.items():
+        raw = value.get(source_key)
+        if isinstance(raw, str):
+            metadata[target_key] = raw
+    document.set_metadata(metadata)
 
 
 def normalize_pages(value: Any, page_count: int) -> list[PageSpec]:
@@ -264,10 +333,15 @@ def apply_insert_phase(
     metrics: PageMetrics,
     font_path: Path,
     flow_slice_images: list[bytes],
+    save_options: SaveOptions,
 ) -> None:
     flow_slice_index = 0
+    native_annotations = save_options.get("annotationMode") == "native"
     for operation in operations:
         op_type = operation["type"]
+        if native_annotations and is_native_annotation_candidate(operation):
+            insert_native_annotation(page, operation, metrics, font_path)
+            continue
         if op_type == "text":
             insert_reflow_text(page, operation, metrics, font_path)
         elif op_type == "flowSlice":
@@ -282,6 +356,64 @@ def apply_insert_phase(
             draw_pen(page, operation, metrics)
         elif op_type == "image":
             insert_image(page, operation, metrics)
+
+
+def is_native_annotation_candidate(operation: Operation) -> bool:
+    if operation["type"] == "text" and isinstance(operation.get("eraseOriginal"), dict):
+        return False
+    return operation["type"] in {"text", "highlight", "rect", "pen"}
+
+
+def insert_native_annotation(
+    page: fitz.Page,
+    operation: Operation,
+    metrics: PageMetrics,
+    font_path: Path,
+) -> None:
+    op_type = operation["type"]
+    color = hex_to_rgb(str(operation.get("color", "#111111")))
+    opacity = float(operation.get("opacity", 1))
+    if op_type == "text":
+        rect = to_rect(operation, metrics)
+        text = str(operation.get("text", ""))
+        font_name = choose_engine_font(operation, text, font_path)
+        if font_name == "pdfeditfont":
+            font_name = "helv"
+        annot = page.add_freetext_annot(
+            rect,
+            text,
+            fontsize=max(4.0, float(operation.get("fontSize", 12))),
+            fontname=font_name,
+            text_color=color,
+            fill_color=None,
+            border_color=None,
+            opacity=opacity,
+        )
+        annot.update()
+        return
+    if op_type == "highlight":
+        annot = page.add_highlight_annot(to_rect(operation, metrics))
+        annot.set_colors(stroke=color)
+        annot.set_opacity(opacity)
+        annot.update()
+        return
+    if op_type == "rect":
+        annot = page.add_rect_annot(to_rect(operation, metrics))
+        annot.set_colors(stroke=color)
+        annot.set_border(width=float(operation.get("strokeWidth", 2)))
+        annot.set_opacity(opacity)
+        annot.update()
+        return
+    if op_type == "pen":
+        points = operation.get("points", [])
+        if not isinstance(points, list) or len(points) < 2:
+            return
+        handwriting = [[to_point(point, metrics) for point in points if isinstance(point, dict)]]
+        annot = page.add_ink_annot(handwriting)
+        annot.set_colors(stroke=color)
+        annot.set_border(width=float(operation.get("strokeWidth", 3)))
+        annot.set_opacity(opacity)
+        annot.update()
 
 
 def render_flow_slice_images(
@@ -417,6 +549,44 @@ def insert_image(page: fitz.Page, operation: Operation, metrics: PageMetrics) ->
         return
     image_bytes = base64.b64decode(data_url.split(",", 1)[1])
     page.insert_image(to_rect(operation, metrics), stream=image_bytes, keep_proportion=True)
+
+
+def validate_pdf_bytes(pdf_bytes: bytes) -> dict[str, Any]:
+    errors: list[str] = []
+    page_count = 0
+    encrypted = False
+    try:
+        with fitz.open(stream=pdf_bytes, filetype="pdf") as document:
+            encrypted = bool(document.needs_pass)
+            page_count = document.page_count if not encrypted else 0
+            if not encrypted:
+                for page_index in range(document.page_count):
+                    document.load_page(page_index)
+    except Exception as exc:  # noqa: BLE001 - validation reports diagnostics instead of crashing
+        errors.append(str(exc))
+
+    qpdf_checked = False
+    if shutil.which("qpdf"):
+        qpdf_checked = True
+        with tempfile.NamedTemporaryFile(suffix=".pdf") as handle:
+            handle.write(pdf_bytes)
+            handle.flush()
+            result = subprocess.run(
+                ["qpdf", "--check", handle.name],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            if result.returncode != 0:
+                errors.append(result.stderr.strip() or result.stdout.strip() or "qpdf --check failed")
+
+    return {
+        "ok": not errors,
+        "pageCount": page_count,
+        "encrypted": encrypted,
+        "qpdfChecked": qpdf_checked,
+        "errors": errors,
+    }
 
 
 def flow_slice_source_rect(operation: Operation, metrics: PageMetrics) -> fitz.Rect:
