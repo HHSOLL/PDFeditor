@@ -12,6 +12,7 @@ import argparse
 import base64
 import io
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -207,7 +208,12 @@ def apply_operations(
         apply_metadata(output, payload.get("metadata"))
         buffer = io.BytesIO()
         output.save(buffer, garbage=4, deflate=True, clean=True)
-        return buffer.getvalue()
+        edited = buffer.getvalue()
+        if save_options.get("validate", True):
+            validation = validate_pdf_bytes(edited)
+            if not validation["ok"]:
+                raise ValueError(f"PDF validation failed: {validation['errors']}")
+        return edited
     finally:
         output.close()
         source.close()
@@ -592,19 +598,22 @@ def validate_pdf_bytes(pdf_bytes: bytes) -> dict[str, Any]:
         errors.append(str(exc))
 
     qpdf_checked = False
-    if shutil.which("qpdf"):
+    qpdf_path = shutil.which("qpdf")
+    if qpdf_path:
         qpdf_checked = True
         with tempfile.NamedTemporaryFile(suffix=".pdf") as handle:
             handle.write(pdf_bytes)
             handle.flush()
             result = subprocess.run(
-                ["qpdf", "--check", handle.name],
+                [qpdf_path, "--check", handle.name],
                 check=False,
                 capture_output=True,
                 text=True,
             )
             if result.returncode != 0:
                 errors.append(result.stderr.strip() or result.stdout.strip() or "qpdf --check failed")
+    elif os.environ.get("REQUIRE_QPDF", "").lower() in {"1", "true", "yes"}:
+        errors.append("qpdf is required for this validation run but was not found on PATH")
 
     return {
         "ok": not errors,

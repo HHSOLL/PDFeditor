@@ -1818,7 +1818,13 @@ async function exportPdf(): Promise<void> {
     return;
   }
 
-  const bytes = await buildExportPdfBytes();
+  let bytes: Uint8Array;
+  try {
+    bytes = await buildExportPdfBytes();
+  } catch (error) {
+    showToast(error instanceof Error ? error.message : "PDF 저장에 실패했습니다.");
+    return;
+  }
   const validation = await validateExportedPdf(bytes, pageItems.length);
   if (!validation.ok) {
     showToast(`PDF 검증 실패: ${validation.errors.join(", ")}`);
@@ -1835,6 +1841,9 @@ async function buildExportPdfBytes(): Promise<Uint8Array> {
   const engineBytes = await tryExportWithEngine();
   if (engineBytes) {
     return engineBytes;
+  }
+  if (isStrictEngineRequired() || requiresPdfEngineForSafeExport()) {
+    throw new Error("PDF 엔진이 꺼져 있어 고급 편집을 안전하게 저장할 수 없습니다. npm run engine:serve를 실행하세요.");
   }
 
   const source = await PDFDocument.load(originalBytes);
@@ -1858,6 +1867,24 @@ async function buildExportPdfBytes(): Promise<Uint8Array> {
 
   const bytes = await output.save();
   return new Uint8Array(bytes);
+}
+
+function isStrictEngineRequired(): boolean {
+  return import.meta.env.VITE_STRICT_ENGINE === "true";
+}
+
+function requiresPdfEngineForSafeExport(): boolean {
+  return (
+    saveMode === "native" ||
+    Boolean(openPassword) ||
+    annotations.some((annotation) => {
+      if (annotation.type === "redact") {
+        return true;
+      }
+      return annotation.type === "text" && Boolean(annotation.sourceTextId || annotation.eraseOriginal);
+    }) ||
+    pageItems.some((item) => layoutFlowSlicesForPage(item.id).length > 0)
+  );
 }
 
 async function tryExportWithEngine(): Promise<Uint8Array | null> {

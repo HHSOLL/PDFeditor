@@ -155,3 +155,26 @@ test("saves metadata and duplicated pages through the advanced save pipeline", a
   expect(exported.getTitle()).toBe("Advanced PDF Studio Export");
   expect(exported.getAuthor()).toBe("HHSOLL");
 });
+
+test("blocks engine-required export when the PDF engine is unavailable", async ({ page }) => {
+  const samplePath = path.resolve("tmp/sample-engine-required.pdf");
+  await createSamplePdf(samplePath);
+  await page.route("**/api/pdf/apply", (route) => {
+    void route.fulfill({
+      status: 503,
+      contentType: "application/json",
+      body: JSON.stringify({ error: "engine intentionally unavailable" }),
+    });
+  });
+
+  await page.goto("http://127.0.0.1:5173/");
+  await page
+    .locator('input[type="file"][accept="application/pdf"]')
+    .setInputFiles(samplePath);
+  await expect(page.locator(".source-text", { hasText: "Original contract title" })).toBeVisible();
+  await page.locator(".source-text", { hasText: "Original contract title" }).click();
+  await page.locator(".annotation.text textarea").fill("엔진 없이 저장되면 안 되는 기존 텍스트 교체");
+
+  await page.getByRole("button", { name: "PDF 내보내기" }).click();
+  await expect(page.locator("#toast")).toContainText("PDF 엔진이 꺼져 있어");
+});

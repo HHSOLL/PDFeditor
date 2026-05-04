@@ -9,8 +9,10 @@
     "engine:install": "python3 -m pip install --user -r engine/requirements.txt",
     "engine:serve": "node server/pdf-engine-server.mjs",
     "serve": "node server/pdf-engine-server.mjs",
-    "test:engine": "node tests/engine-smoke.mjs",
+    "ensure:qpdf": "node tests/ensure-qpdf.mjs",
+    "test:engine": "node tests/run-engine-tests.mjs",
     "test:e2e": "playwright test",
+    "verify:local": "npm run ensure:qpdf && REQUIRE_QPDF=1 VITE_STRICT_ENGINE=true npm run build && REQUIRE_QPDF=1 npm run test:engine && REQUIRE_QPDF=1 VITE_STRICT_ENGINE=true npm run test:e2e -- --reporter=list && npm audit --audit-level=moderate",
     "preview": "vite preview --host 127.0.0.1"
   },
   "dependencies": {

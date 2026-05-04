@@ -44,3 +44,5 @@ It keeps the browser app isolated from Python/PyMuPDF process execution and give
 - Use redaction for destructive removal, not white rectangles only.
 - Keep native annotations optional because some users need flattened immutable PDFs.
 - Re-open exported PDFs before claiming the save succeeded.
+- Require qpdf in local verification so structural validation is not silently skipped.
+- Do not use browser fallback for engine-required operations such as redaction or existing text replacement.

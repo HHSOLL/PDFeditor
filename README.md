@@ -28,6 +28,8 @@ It is designed around a real save pipeline, not screenshot export:
 ```bash
 npm install
 npm run engine:install
+npx playwright install chromium
+brew install qpdf
 ```
 
 ## Development
@@ -47,11 +49,21 @@ end-to-end suite is reproducible from a clean shell.
 ## Verification
 
 ```bash
+npm run verify:local
+```
+
+`verify:local` requires `qpdf` on PATH and runs the strict engine path:
+
+```bash
+npm run ensure:qpdf
 npm run build
 npm run test:engine
 npm run test:e2e -- --reporter=list
 npm audit --audit-level=moderate
 ```
+
+`test:engine` runs the engine smoke, redaction policy, render-diff, and page
+operation roundtrip tests.
 
 ## Architecture
 
