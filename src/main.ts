@@ -11,7 +11,7 @@ import {
   type PDFPage,
   type RGB,
 } from "pdf-lib";
-import { bytesToBase64 } from "./base64";
+import { base64ToBytes, bytesToBase64 } from "./base64";
 import { clamp, isMostlyHorizontalText, isNumberArray, multiplyMatrix } from "./geometry";
 import { asMetadataString, emptyMetadata } from "./metadata";
 import {
@@ -27,8 +27,16 @@ import { renderFormFieldInspector } from "./formFieldPanel";
 import { buildEngineSaveOptions } from "./enginePayload";
 import {
   applyPdfWithEngine,
+  batchPdfWithEngine,
   buildEngineEndpoints,
+  comparePdfWithEngine,
+  correctOcrPdfWithEngine,
+  getOcrStatusWithEngine,
+  ocrPdfWithEngine,
   preflightPdfWithEngine,
+  repairAccessibilityWithEngine,
+  signPdfWithCertificate,
+  validateSignatureWithEngine,
   validatePdfWithEngine,
 } from "./export/engineClient";
 import type {
@@ -45,6 +53,7 @@ import type {
   FlowedSourceText,
   FormFieldAnnotation,
   ImageAnnotation,
+  OcrStatus,
   PageFlowSlice,
   PageItem,
   PdfTextItem,
@@ -54,6 +63,9 @@ import type {
   PreflightReport,
   RedactionMode,
   SaveMode,
+  SignatureValidation,
+  BatchResult,
+  CompareResult,
   Snapshot,
   SourceAnnotationRef,
   SourceImageItem,
@@ -82,6 +94,26 @@ let saveMode: SaveMode = "flatten";
 let redactionMode: RedactionMode = "textOnly";
 let sanitizeHiddenInfo = false;
 let lastPreflightReport: PreflightReport | null = null;
+let lastOcrStatus: OcrStatus | null = null;
+let lastSignatureValidation: SignatureValidation | null = null;
+let compareBytes: Uint8Array | null = null;
+let compareFileName = "";
+let lastCompareResult: CompareResult | null = null;
+let batchWatermarkText = "Batch watermark";
+let batchRedactText = "";
+let batchSanitizeHiddenInfo = true;
+let lastBatchResult: BatchResult | null = null;
+let ocrLanguage = "eng+kor";
+let ocrCorrectionText = "";
+let ocrCorrectionPage = 1;
+let accessibilityLanguage = "ko-KR";
+let accessibilityAltText = "";
+let certificatePem = "";
+let certificateKeyPem = "";
+let certificateSignerName = "PDFeditor signer";
+let certificateReason = "Document approval";
+let certificateLocation = "Local";
+let certificateLockPolicy: "none" | "noChanges" | "formFill" | "formFillAnnotate" = "formFill";
 let openPassword = "";
 let currentPageId: string | null = null;
 let selectedId: string | null = null;
@@ -114,6 +146,9 @@ const tools: Array<{ id: Tool; label: string; icon: string }> = [
 const dom = {
   fileInput: document.createElement("input"),
   imageInput: document.createElement("input"),
+  compareInput: document.createElement("input"),
+  certificateInput: document.createElement("input"),
+  certificateKeyInput: document.createElement("input"),
 };
 
 configureFeatureCommands({ onDisabledCommand: showToast });
@@ -140,6 +175,70 @@ registerCommand({
   enabled: () => Boolean(originalBytes && pdfDocument),
   disabledReason: () => "먼저 PDF를 열어주세요.",
   run: () => void runPreflightCheck(),
+});
+registerCommand({
+  id: "ocr-status",
+  label: "OCR 상태 확인",
+  implemented: true,
+  enabled: () => Boolean(originalBytes && pdfDocument),
+  disabledReason: () => "먼저 PDF를 열어주세요.",
+  run: () => void runOcrStatusCheck(),
+});
+registerCommand({
+  id: "ocr-run",
+  label: "OCR 실행",
+  implemented: true,
+  enabled: () => Boolean(originalBytes && pdfDocument),
+  disabledReason: () => "먼저 PDF를 열어주세요.",
+  run: () => void runOcrOnDocument(),
+});
+registerCommand({
+  id: "ocr-correct",
+  label: "OCR 보정 저장",
+  implemented: true,
+  enabled: () => Boolean(originalBytes && pdfDocument && ocrCorrectionText.trim()),
+  disabledReason: () => "PDF를 열고 보정할 OCR 텍스트를 입력하세요.",
+  run: () => void correctOcrOnDocument(),
+});
+registerCommand({
+  id: "accessibility-repair",
+  label: "접근성 기본 수리",
+  implemented: true,
+  enabled: () => Boolean(originalBytes && pdfDocument),
+  disabledReason: () => "먼저 PDF를 열어주세요.",
+  run: () => void repairAccessibilityOnDocument(),
+});
+registerCommand({
+  id: "certificate-sign",
+  label: "인증서 서명",
+  implemented: true,
+  enabled: () => Boolean(originalBytes && pdfDocument && certificatePem && certificateKeyPem),
+  disabledReason: () => "PDF와 PEM 인증서/개인키를 먼저 준비하세요.",
+  run: () => void signDocumentWithCertificate(),
+});
+registerCommand({
+  id: "signature-validate",
+  label: "서명 검증",
+  implemented: true,
+  enabled: () => Boolean(originalBytes && pdfDocument),
+  disabledReason: () => "먼저 PDF를 열어주세요.",
+  run: () => void validateCurrentSignature(),
+});
+registerCommand({
+  id: "compare-run",
+  label: "PDF 비교",
+  implemented: true,
+  enabled: () => Boolean(originalBytes && pdfDocument && compareBytes),
+  disabledReason: () => "현재 PDF와 비교할 다른 PDF를 선택하세요.",
+  run: () => void runCompareWithSelectedPdf(),
+});
+registerCommand({
+  id: "batch-run",
+  label: "배치 실행",
+  implemented: true,
+  enabled: () => Boolean(originalBytes && pdfDocument && (batchWatermarkText.trim() || batchRedactText.trim() || batchSanitizeHiddenInfo)),
+  disabledReason: () => "PDF를 열고 배치 단계 하나 이상을 설정하세요.",
+  run: () => void runBatchQuickAction(),
 });
 registerCommand({
   id: "undo",
@@ -399,7 +498,19 @@ function renderApp(): void {
   dom.imageInput.type = "file";
   dom.imageInput.accept = "image/png,image/jpeg,image/webp";
   dom.imageInput.className = "hidden";
-  appRoot.append(dom.fileInput, dom.imageInput);
+  dom.compareInput.type = "file";
+  dom.compareInput.accept = ".pdf,application/pdf";
+  dom.compareInput.id = "compareInput";
+  dom.compareInput.className = "hidden";
+  dom.certificateInput.type = "file";
+  dom.certificateInput.accept = ".pem,.crt,.cer,.txt";
+  dom.certificateInput.id = "certificateInput";
+  dom.certificateInput.className = "hidden";
+  dom.certificateKeyInput.type = "file";
+  dom.certificateKeyInput.accept = ".pem,.key,.txt";
+  dom.certificateKeyInput.id = "certificateKeyInput";
+  dom.certificateKeyInput.className = "hidden";
+  appRoot.append(dom.fileInput, dom.imageInput, dom.compareInput, dom.certificateInput, dom.certificateKeyInput);
 
   bindStaticEvents();
   renderToolbar();
@@ -443,6 +554,44 @@ function bindStaticEvents(): void {
       }
     });
     reader.readAsDataURL(file);
+  });
+
+  dom.compareInput.addEventListener("change", () => {
+    const file = dom.compareInput.files?.[0];
+    if (!file) {
+      return;
+    }
+    void file.arrayBuffer().then((buffer) => {
+      compareBytes = new Uint8Array(buffer);
+      compareFileName = file.name;
+      lastCompareResult = null;
+      showToast(`${file.name} 비교 PDF를 불러왔습니다.`);
+      renderInspector();
+    });
+  });
+
+  dom.certificateInput.addEventListener("change", () => {
+    const file = dom.certificateInput.files?.[0];
+    if (!file) {
+      return;
+    }
+    void readTextFile(file).then((text) => {
+      certificatePem = text;
+      showToast(`${file.name} 인증서를 불러왔습니다.`);
+      renderInspector();
+    });
+  });
+
+  dom.certificateKeyInput.addEventListener("change", () => {
+    const file = dom.certificateKeyInput.files?.[0];
+    if (!file) {
+      return;
+    }
+    void readTextFile(file).then((text) => {
+      certificateKeyPem = text;
+      showToast(`${file.name} 개인키를 불러왔습니다.`);
+      renderInspector();
+    });
   });
 
   window.addEventListener("keydown", (event) => {
@@ -538,8 +687,12 @@ function separator(): HTMLDivElement {
 
 async function loadPdf(file: File): Promise<void> {
   const bytes = new Uint8Array(await file.arrayBuffer());
+  await loadPdfBytes(bytes, file.name.replace(/\.pdf$/i, "") + "-edited.pdf", `${file.name} 파일을 열었습니다.`);
+}
+
+async function loadPdfBytes(bytes: Uint8Array, nextFileName: string, message: string): Promise<void> {
   originalBytes = bytes;
-  fileName = file.name.replace(/\.pdf$/i, "") + "-edited.pdf";
+  fileName = nextFileName;
   openPassword = "";
   pdfDocument = await openPdfDocument(bytes);
   pageItems = Array.from({ length: pdfDocument.numPages }, (_, index) => ({
@@ -557,6 +710,9 @@ async function loadPdf(file: File): Promise<void> {
   redactionMode = "textOnly";
   sanitizeHiddenInfo = false;
   lastPreflightReport = null;
+  lastSignatureValidation = null;
+  lastCompareResult = null;
+  lastBatchResult = null;
   selectedId = null;
   currentPageId = pageItems[0]?.id ?? null;
   await cacheSourceTextItems();
@@ -568,7 +724,7 @@ async function loadPdf(file: File): Promise<void> {
   renderToolbar();
   await renderWorkspace();
   renderInspector();
-  showToast(`${file.name} 파일을 열었습니다.`);
+  showToast(message);
 }
 
 async function openPdfDocument(bytes: Uint8Array): Promise<pdfjs.PDFDocumentProxy> {
@@ -2485,6 +2641,25 @@ function isSourceImageAlreadyEdited(sourceImageItemId: string): boolean {
   );
 }
 
+function sourceImageItemById(sourceImageItemId: string): SourceImageItem | null {
+  for (const items of sourceImageItemsByPage.values()) {
+    const match = items.find((item) => item.id === sourceImageItemId);
+    if (match) {
+      return match;
+    }
+  }
+  return null;
+}
+
+function rectChangedFromSourceImage(annotation: Annotation, sourceImage: SourceImageItem): boolean {
+  return (
+    Math.abs(annotation.x - sourceImage.x) > 0.002 ||
+    Math.abs(annotation.y - sourceImage.y) > 0.002 ||
+    Math.abs(annotation.width - sourceImage.width) > 0.002 ||
+    Math.abs(annotation.height - sourceImage.height) > 0.002
+  );
+}
+
 function pageHasSourceTextEdit(pageId: string): boolean {
   return annotations.some(
     (annotation) => annotation.pageId === pageId && annotation.type === "text" && Boolean(annotation.sourceTextId),
@@ -2909,7 +3084,108 @@ function documentFields(): string {
       <button id="preflightButton" type="button">사전 검사</button>
     </div>
     ${lastPreflightReport ? renderPreflightPanel(lastPreflightReport, escapeHtml) : ""}
-    <details class="metadata-panel">
+    <details class="metadata-panel product-tool-panel" open>
+      <summary>OCR / 스캔 PDF</summary>
+      <div class="field">
+        <label>OCR 언어</label>
+        <input id="ocrLanguage" type="text" value="${escapeHtml(ocrLanguage)}" />
+      </div>
+      <div class="mini-actions">
+        <button id="ocrStatusButton" type="button">OCR 상태</button>
+        <button id="ocrRunButton" type="button">OCR 실행</button>
+      </div>
+      <div class="field-row">
+        <div class="field">
+          <label>보정 페이지</label>
+          <input id="ocrCorrectionPage" type="number" min="1" step="1" value="${ocrCorrectionPage}" />
+        </div>
+      </div>
+      <div class="field">
+        <label>보정 OCR 텍스트</label>
+        <textarea id="ocrCorrectionText" placeholder="스캔 페이지에 저장할 검색 가능한 보정 텍스트">${escapeHtml(ocrCorrectionText)}</textarea>
+      </div>
+      <div class="mini-actions">
+        <button id="ocrCorrectButton" type="button">OCR 보정 저장</button>
+      </div>
+      ${lastOcrStatus ? `<p class="status-line">Tesseract ${escapeHtml(lastOcrStatus.version || "unknown")} · 누락 언어 ${lastOcrStatus.missingLanguages.length}</p>` : ""}
+    </details>
+    <details class="metadata-panel product-tool-panel" open>
+      <summary>인증서 서명 / 보안</summary>
+      <div class="mini-actions">
+        <button id="selectCertificateButton" type="button">인증서 선택</button>
+        <button id="selectCertificateKeyButton" type="button">개인키 선택</button>
+      </div>
+      <p class="status-line">인증서 ${certificatePem ? "준비됨" : "없음"} · 개인키 ${certificateKeyPem ? "준비됨" : "없음"}</p>
+      <div class="field">
+        <label>서명자</label>
+        <input id="certificateSignerName" type="text" value="${escapeHtml(certificateSignerName)}" />
+      </div>
+      <div class="field">
+        <label>사유</label>
+        <input id="certificateReason" type="text" value="${escapeHtml(certificateReason)}" />
+      </div>
+      <div class="field">
+        <label>위치</label>
+        <input id="certificateLocation" type="text" value="${escapeHtml(certificateLocation)}" />
+      </div>
+      <div class="field">
+        <label>잠금 정책</label>
+        <select id="certificateLockPolicy">
+          <option value="none"${certificateLockPolicy === "none" ? " selected" : ""}>잠금 없음</option>
+          <option value="noChanges"${certificateLockPolicy === "noChanges" ? " selected" : ""}>변경 금지</option>
+          <option value="formFill"${certificateLockPolicy === "formFill" ? " selected" : ""}>양식 작성 허용</option>
+          <option value="formFillAnnotate"${certificateLockPolicy === "formFillAnnotate" ? " selected" : ""}>양식/주석 허용</option>
+        </select>
+      </div>
+      <div class="mini-actions">
+        <button id="certificateSignButton" type="button">인증서 서명</button>
+        <button id="signatureValidateButton" type="button">서명 검증</button>
+      </div>
+      ${lastSignatureValidation ? signatureValidationSummary(lastSignatureValidation) : ""}
+    </details>
+    <details class="metadata-panel product-tool-panel" open>
+      <summary>접근성 기본 수리</summary>
+      <div class="field">
+        <label>문서 언어</label>
+        <input id="accessibilityLanguage" type="text" value="${escapeHtml(accessibilityLanguage)}" />
+      </div>
+      <div class="field">
+        <label>첫 이미지 대체 텍스트</label>
+        <textarea id="accessibilityAltText" placeholder="첫 페이지 첫 이미지에 저장할 alt text">${escapeHtml(accessibilityAltText)}</textarea>
+      </div>
+      <div class="mini-actions">
+        <button id="accessibilityRepairButton" type="button">접근성 수리 저장</button>
+      </div>
+      <p class="status-line">PDF/UA 완전 검증이 아니라 제목, 언어, 태그 신호, 탭 순서, 이미지 alt text 기본 수리입니다.</p>
+    </details>
+    <details class="metadata-panel product-tool-panel" open>
+      <summary>비교 / 배치 자동화</summary>
+      <div class="mini-actions">
+        <button id="selectCompareButton" type="button">비교 PDF 선택</button>
+        <button id="compareRunButton" type="button">비교 실행</button>
+      </div>
+      <p class="status-line">비교 대상 ${compareFileName ? escapeHtml(compareFileName) : "없음"}</p>
+      ${lastCompareResult ? compareResultSummary(lastCompareResult) : ""}
+      <div class="field">
+        <label>배치 워터마크 텍스트</label>
+        <input id="batchWatermarkText" type="text" value="${escapeHtml(batchWatermarkText)}" />
+      </div>
+      <div class="field">
+        <label>배치 검색 가리기 텍스트</label>
+        <input id="batchRedactText" type="text" value="${escapeHtml(batchRedactText)}" placeholder="예: SECRET" />
+      </div>
+      <div class="field">
+        <label class="checkbox-line">
+          <input id="batchSanitizeHiddenInfo" type="checkbox"${batchSanitizeHiddenInfo ? " checked" : ""} />
+          배치에서 숨은 정보 제거
+        </label>
+      </div>
+      <div class="mini-actions">
+        <button id="batchRunButton" type="button">현재 PDF 배치 실행</button>
+      </div>
+      ${lastBatchResult ? batchResultSummary(lastBatchResult) : ""}
+    </details>
+    <details class="metadata-panel" open>
       <summary>문서 메타데이터</summary>
       <div class="field">
         <label>제목</label>
@@ -2928,6 +3204,44 @@ function documentFields(): string {
         <input id="metaKeywords" type="text" value="${escapeHtml(documentMetadata.keywords)}" />
       </div>
     </details>
+  `;
+}
+
+function signatureValidationSummary(report: SignatureValidation): string {
+  const verifiedCount = report.signatures.filter((signature) => signature.cmsVerified).length;
+  const lockPolicy = report.signatures.find((signature) => signature.lockPolicy)?.lockPolicy ?? "none";
+  const errors = [...report.errors, ...report.signatures.flatMap((signature) => signature.errors)].filter(Boolean);
+  return `
+    <div class="preflight-panel">
+      <strong>서명 검증</strong>
+      <small>${report.signatureCount}개 서명 · ${verifiedCount}개 CMS 검증 · DocMDP ${escapeHtml(lockPolicy)}</small>
+      ${errors.length ? `<ul>${errors.slice(0, 4).map((error) => `<li>${escapeHtml(error)}</li>`).join("")}</ul>` : "<p>서명 ByteRange와 CMS 검증을 통과했습니다.</p>"}
+    </div>
+  `;
+}
+
+function compareResultSummary(report: CompareResult): string {
+  const changedPages = report.changedPages.map((pageIndex) => pageIndex + 1).join(", ") || "없음";
+  const firstTextChange = report.textChanges[0];
+  return `
+    <div class="preflight-panel">
+      <strong>비교 결과</strong>
+      <small>${report.leftPageCount}쪽 ↔ ${report.rightPageCount}쪽 · 변경 ${report.changedPageCount}쪽</small>
+      <p>변경 페이지: ${escapeHtml(changedPages)}</p>
+      ${firstTextChange ? `<p>첫 텍스트 변경: ${escapeHtml(firstTextChange.leftPreview.slice(0, 80))} → ${escapeHtml(firstTextChange.rightPreview.slice(0, 80))}</p>` : ""}
+      ${report.errors.length ? `<ul>${report.errors.map((error) => `<li>${escapeHtml(error)}</li>`).join("")}</ul>` : ""}
+    </div>
+  `;
+}
+
+function batchResultSummary(report: BatchResult): string {
+  const firstError = report.jobs.find((job) => !job.ok)?.error;
+  return `
+    <div class="preflight-panel">
+      <strong>배치 결과</strong>
+      <small>${report.successCount}/${report.jobCount} 성공 · 실패 ${report.failureCount}</small>
+      ${firstError ? `<p>${escapeHtml(firstError)}</p>` : "<p>현재 PDF 배치 결과를 PDF 구조에 저장했습니다.</p>"}
+    </div>
   `;
 }
 
@@ -3022,6 +3336,76 @@ function bindDocumentControls(): void {
     commitHistory();
   });
   bindCommandButton("preflightButton", "preflight-pdf");
+  bindDocumentToolFields();
+  bindCommandButton("ocrStatusButton", "ocr-status");
+  bindCommandButton("ocrRunButton", "ocr-run");
+  bindCommandButton("ocrCorrectButton", "ocr-correct");
+  bindCommandButton("accessibilityRepairButton", "accessibility-repair");
+  bindCommandButton("certificateSignButton", "certificate-sign");
+  bindCommandButton("signatureValidateButton", "signature-validate");
+  bindCommandButton("compareRunButton", "compare-run");
+  bindCommandButton("batchRunButton", "batch-run");
+  byId<HTMLButtonElement>("selectCertificateButton")?.addEventListener("click", () => dom.certificateInput.click());
+  byId<HTMLButtonElement>("selectCertificateKeyButton")?.addEventListener("click", () => dom.certificateKeyInput.click());
+  byId<HTMLButtonElement>("selectCompareButton")?.addEventListener("click", () => dom.compareInput.click());
+}
+
+function bindDocumentToolFields(): void {
+  const ocrLanguageField = document.querySelector<HTMLInputElement>("#ocrLanguage");
+  ocrLanguageField?.addEventListener("change", () => {
+    ocrLanguage = ocrLanguageField.value.trim() || "eng";
+    renderInspector();
+  });
+  const ocrCorrectionPageField = document.querySelector<HTMLInputElement>("#ocrCorrectionPage");
+  ocrCorrectionPageField?.addEventListener("change", () => {
+    const value = Number(ocrCorrectionPageField.value);
+    ocrCorrectionPage = Number.isFinite(value) && value > 0 ? Math.round(value) : 1;
+    renderInspector();
+  });
+  const ocrCorrectionTextField = document.querySelector<HTMLTextAreaElement>("#ocrCorrectionText");
+  ocrCorrectionTextField?.addEventListener("input", () => {
+    ocrCorrectionText = ocrCorrectionTextField.value;
+    syncCommandButtons();
+  });
+  const accessibilityLanguageField = document.querySelector<HTMLInputElement>("#accessibilityLanguage");
+  accessibilityLanguageField?.addEventListener("change", () => {
+    accessibilityLanguage = accessibilityLanguageField.value.trim() || "en-US";
+  });
+  const accessibilityAltTextField = document.querySelector<HTMLTextAreaElement>("#accessibilityAltText");
+  accessibilityAltTextField?.addEventListener("input", () => {
+    accessibilityAltText = accessibilityAltTextField.value;
+  });
+  const certificateSignerNameField = document.querySelector<HTMLInputElement>("#certificateSignerName");
+  certificateSignerNameField?.addEventListener("change", () => {
+    certificateSignerName = certificateSignerNameField.value.trim() || "PDFeditor signer";
+  });
+  const certificateReasonField = document.querySelector<HTMLInputElement>("#certificateReason");
+  certificateReasonField?.addEventListener("change", () => {
+    certificateReason = certificateReasonField.value.trim();
+  });
+  const certificateLocationField = document.querySelector<HTMLInputElement>("#certificateLocation");
+  certificateLocationField?.addEventListener("change", () => {
+    certificateLocation = certificateLocationField.value.trim();
+  });
+  const certificateLockPolicyField = document.querySelector<HTMLSelectElement>("#certificateLockPolicy");
+  certificateLockPolicyField?.addEventListener("change", () => {
+    certificateLockPolicy = certificateLockPolicyField.value as typeof certificateLockPolicy;
+  });
+  const batchWatermarkTextField = document.querySelector<HTMLInputElement>("#batchWatermarkText");
+  batchWatermarkTextField?.addEventListener("input", () => {
+    batchWatermarkText = batchWatermarkTextField.value;
+    syncCommandButtons();
+  });
+  const batchRedactTextField = document.querySelector<HTMLInputElement>("#batchRedactText");
+  batchRedactTextField?.addEventListener("input", () => {
+    batchRedactText = batchRedactTextField.value;
+    syncCommandButtons();
+  });
+  const batchSanitizeHiddenInfoField = document.querySelector<HTMLInputElement>("#batchSanitizeHiddenInfo");
+  batchSanitizeHiddenInfoField?.addEventListener("change", () => {
+    batchSanitizeHiddenInfo = batchSanitizeHiddenInfoField.checked;
+    syncCommandButtons();
+  });
 }
 
 function bindMetadataField(id: string, key: keyof DocumentMetadata): void {
@@ -3567,6 +3951,268 @@ async function runPreflightCheck(): Promise<void> {
   showToast(report.warnings.length ? `사전 검사 경고 ${report.warnings.length}개` : "사전 검사 통과");
 }
 
+async function runOcrStatusCheck(): Promise<void> {
+  lastOcrStatus = await getOcrStatusWithEngine(ocrLanguage);
+  renderInspector();
+  if (!lastOcrStatus) {
+    showToast("OCR 엔진 상태를 확인할 수 없습니다.");
+    return;
+  }
+  showToast(lastOcrStatus.ok ? "OCR 런타임을 사용할 수 있습니다." : `OCR 누락: ${lastOcrStatus.errors.join(", ")}`);
+}
+
+async function runOcrOnDocument(): Promise<void> {
+  if (!originalBytes || !pdfDocument) {
+    showToast("먼저 PDF를 열어주세요.");
+    return;
+  }
+  const bytes = await ocrPdfWithEngine({
+    bytes: originalBytes,
+    password: openPassword,
+    language: ocrLanguage,
+    pages: "all",
+    dpi: 220,
+    force: true,
+  });
+  if (!bytes) {
+    showToast("OCR PDF를 만들 수 없습니다. OCR 엔진 상태를 확인하세요.");
+    return;
+  }
+  await validateExportedPdf(bytes, pageItems.length);
+  await loadPdfBytes(bytes, withSuffix(fileName, "ocr"), "OCR 검색 레이어를 PDF 구조에 저장했습니다.");
+  downloadPdf(bytes, "OCR 검색 가능 PDF를 저장했습니다.");
+}
+
+async function correctOcrOnDocument(): Promise<void> {
+  if (!originalBytes || !pdfDocument) {
+    showToast("먼저 PDF를 열어주세요.");
+    return;
+  }
+  const text = ocrCorrectionText.trim();
+  if (!text) {
+    showToast("보정할 OCR 텍스트를 입력하세요.");
+    return;
+  }
+  const pageIndex = clamp(Math.round(ocrCorrectionPage) - 1, 0, Math.max(0, pageItems.length - 1));
+  const bytes = await correctOcrPdfWithEngine({
+    bytes: originalBytes,
+    password: openPassword,
+    dpi: 220,
+    corrections: [
+      {
+        pageIndex,
+        x: 0.06,
+        y: 0.06,
+        width: 0.88,
+        height: 0.16,
+        text,
+        fontSize: 12,
+      },
+    ],
+  });
+  if (!bytes) {
+    showToast("OCR 보정 PDF를 만들 수 없습니다.");
+    return;
+  }
+  await validateExportedPdf(bytes, pageItems.length);
+  await loadPdfBytes(bytes, withSuffix(fileName, "ocr-corrected"), "보정 OCR 텍스트를 검색 가능한 PDF 구조에 저장했습니다.");
+  downloadPdf(bytes, "OCR 보정 PDF를 저장했습니다.");
+}
+
+async function repairAccessibilityOnDocument(): Promise<void> {
+  if (!originalBytes || !pdfDocument) {
+    showToast("먼저 PDF를 열어주세요.");
+    return;
+  }
+  const bytes = await repairAccessibilityWithEngine({
+    bytes: originalBytes,
+    password: openPassword,
+    title: documentMetadata.title || fileName.replace(/\.pdf$/i, ""),
+    language: accessibilityLanguage,
+    altTexts: accessibilityAltText.trim()
+      ? [{ pageIndex: 0, imageIndex: 0, altText: accessibilityAltText.trim() }]
+      : [],
+  });
+  if (!bytes) {
+    showToast("접근성 기본 수리를 저장할 수 없습니다.");
+    return;
+  }
+  await validateExportedPdf(bytes, pageItems.length);
+  await loadPdfBytes(bytes, withSuffix(fileName, "accessible"), "접근성 기본 수리를 PDF 구조에 저장했습니다.");
+  downloadPdf(bytes, "접근성 기본 수리 PDF를 저장했습니다.");
+}
+
+async function signDocumentWithCertificate(): Promise<void> {
+  if (!originalBytes || !pdfDocument) {
+    showToast("먼저 PDF를 열어주세요.");
+    return;
+  }
+  if (!certificatePem || !certificateKeyPem) {
+    showToast("PEM 인증서와 개인키를 먼저 선택하세요.");
+    return;
+  }
+  let bytes: Uint8Array;
+  try {
+    bytes = await buildExportPdfBytes();
+  } catch (error) {
+    showToast(error instanceof Error ? error.message : "서명할 PDF를 만들 수 없습니다.");
+    return;
+  }
+  const signed = await signPdfWithCertificate({
+    bytes,
+    certPem: certificatePem,
+    keyPem: certificateKeyPem,
+    password: openPassword,
+    fieldName: "PDFeditorSignature",
+    signerName: certificateSignerName,
+    reason: certificateReason,
+    location: certificateLocation,
+    pageIndex: Math.max(0, pageItems.findIndex((item) => item.id === currentPageId)),
+    rect: { x: 72, y: 72, width: 180, height: 48 },
+    lockPolicy: certificateLockPolicy,
+  });
+  if (!signed) {
+    showToast("인증서 서명에 실패했습니다.");
+    return;
+  }
+  lastSignatureValidation = await validateSignatureWithEngine(signed);
+  await loadPdfBytes(signed, withSuffix(fileName, "signed"), "인증서 서명을 PDF 구조에 저장했습니다.");
+  lastSignatureValidation = await validateSignatureWithEngine(signed);
+  renderInspector();
+  downloadPdf(signed, "인증서 서명 PDF를 저장했습니다.");
+}
+
+async function validateCurrentSignature(): Promise<void> {
+  if (!originalBytes || !pdfDocument) {
+    showToast("먼저 PDF를 열어주세요.");
+    return;
+  }
+  lastSignatureValidation = await validateSignatureWithEngine(originalBytes);
+  renderInspector();
+  if (!lastSignatureValidation) {
+    showToast("서명 검증을 실행할 수 없습니다.");
+    return;
+  }
+  showToast(lastSignatureValidation.ok ? "서명 검증을 통과했습니다." : "서명 검증 실패 또는 서명 없음.");
+}
+
+async function runCompareWithSelectedPdf(): Promise<void> {
+  if (!originalBytes || !pdfDocument || !compareBytes) {
+    showToast("현재 PDF와 비교할 PDF를 먼저 선택하세요.");
+    return;
+  }
+  let leftBytes: Uint8Array;
+  try {
+    leftBytes = await buildExportPdfBytes();
+  } catch (error) {
+    showToast(error instanceof Error ? error.message : "비교할 현재 PDF를 만들 수 없습니다.");
+    return;
+  }
+  const result = await comparePdfWithEngine(leftBytes, compareBytes, true);
+  if (!result) {
+    showToast("PDF 비교 엔진을 사용할 수 없습니다.");
+    return;
+  }
+  lastCompareResult = result;
+  renderInspector();
+  if (result.reportBase64) {
+    downloadNamedPdf(
+      base64ToBytes(result.reportBase64),
+      withSuffix(fileName, "compare-report"),
+      `비교 완료: ${result.changedPageCount}쪽 변경, 보고서 PDF를 저장했습니다.`,
+    );
+    return;
+  }
+  showToast(result.ok ? `비교 완료: ${result.changedPageCount}쪽 변경` : "PDF 비교 실패");
+}
+
+async function runBatchQuickAction(): Promise<void> {
+  if (!originalBytes || !pdfDocument) {
+    showToast("먼저 PDF를 열어주세요.");
+    return;
+  }
+  const layoutWarnings = layoutCollisionWarnings();
+  if (layoutWarnings.length > 0) {
+    showToast(`레이아웃 충돌: ${layoutWarnings[0]}`);
+    return;
+  }
+  const payload = buildBatchPayload(originalBytes);
+  const result = await batchPdfWithEngine([
+    {
+      fileName,
+      bytes: originalBytes,
+      payload,
+    },
+  ]);
+  if (!result) {
+    showToast("배치 엔진을 사용할 수 없습니다.");
+    return;
+  }
+  lastBatchResult = result;
+  const firstJob = result.jobs[0];
+  if (!result.ok || !firstJob?.pdfBase64) {
+    renderInspector();
+    showToast(firstJob?.error || "배치 작업이 실패했습니다.");
+    return;
+  }
+  const editedBytes = base64ToBytes(firstJob.pdfBase64);
+  await loadPdfBytes(editedBytes, withSuffix(fileName, "batch"), "배치 작업 결과를 PDF 구조에 적용했습니다.");
+  lastBatchResult = result;
+  renderInspector();
+  downloadPdf(editedBytes, "배치 결과 PDF를 저장했습니다.");
+}
+
+function buildBatchPayload(bytes: Uint8Array): EnginePayload {
+  const payload = buildEnginePayload(bytes);
+  const operations = [...payload.operations];
+  const watermarkText = batchWatermarkText.trim();
+  if (watermarkText) {
+    for (let pageIndex = 0; pageIndex < pageItems.length; pageIndex += 1) {
+      operations.push({
+        type: "text",
+        pageIndex,
+        x: 0.07,
+        y: 0.04,
+        width: 0.86,
+        height: 0.04,
+        text: watermarkText,
+        fontSize: 12,
+        color: "#295BDB",
+        opacity: 0.75,
+        strokeWidth: 1,
+        lineHeight: 1.2,
+      });
+    }
+  }
+  const redactText = batchRedactText.trim();
+  if (redactText) {
+    for (let pageIndex = 0; pageIndex < pageItems.length; pageIndex += 1) {
+      operations.push({
+        type: "redactSearch",
+        pageIndex,
+        x: 0,
+        y: 0,
+        width: 0,
+        height: 0,
+        text: redactText,
+        color: "#ffffff",
+        opacity: 1,
+        strokeWidth: 0,
+        caseSensitive: false,
+      });
+    }
+  }
+  payload.operations = operations;
+  if (batchSanitizeHiddenInfo || sanitizeHiddenInfo) {
+    payload.saveOptions = buildEngineSaveOptions({
+      saveMode,
+      redactionMode,
+      sanitizeHiddenInfo: true,
+    });
+  }
+  return payload;
+}
+
 async function buildExportPdfBytes(): Promise<Uint8Array> {
   if (!originalBytes || !pdfDocument) {
     throw new Error("PDF is not loaded.");
@@ -3840,10 +4486,24 @@ function annotationToEngineOperation(annotation: Annotation, pageIndex: number):
   };
 
   if (annotation.sourceImageId && annotation.type === "redact") {
+    const sourceImage = sourceImageItemById(annotation.sourceImageId);
+    if (sourceImage && rectChangedFromSourceImage(annotation, sourceImage)) {
+      return {
+        ...base,
+        type: "moveImage",
+        sourceImageId: sourceImage.sourceImageId,
+        eraseOriginal: {
+          x: sourceImage.x,
+          y: sourceImage.y,
+          width: sourceImage.width,
+          height: sourceImage.height,
+        },
+      };
+    }
     return {
       ...base,
       type: "deleteImage",
-      sourceImageId: annotation.sourceImageId,
+      sourceImageId: sourceImage?.sourceImageId ?? annotation.sourceImageId,
     };
   }
 
@@ -3988,15 +4648,34 @@ function applyPdfLibMetadata(document: PDFDocument): void {
 }
 
 function downloadPdf(bytes: Uint8Array, message: string): void {
+  downloadNamedPdf(bytes, fileName, message);
+}
+
+function downloadNamedPdf(bytes: Uint8Array, name: string, message: string): void {
   const stableBytes = new Uint8Array(bytes);
   const blob = new Blob([stableBytes.buffer], { type: "application/pdf" });
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = url;
-  link.download = fileName;
+  link.download = name;
   link.click();
   URL.revokeObjectURL(url);
   showToast(message);
+}
+
+function withSuffix(name: string, suffix: string): string {
+  return `${name.replace(/\.pdf$/i, "").replace(/-(edited|ocr|ocr-corrected|accessible|signed)$/i, "")}-${suffix}.pdf`;
+}
+
+function readTextFile(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.addEventListener("load", () => {
+      resolve(typeof reader.result === "string" ? reader.result : "");
+    });
+    reader.addEventListener("error", () => reject(reader.error ?? new Error("Could not read file")));
+    reader.readAsText(file);
+  });
 }
 
 async function copyOriginalPage(

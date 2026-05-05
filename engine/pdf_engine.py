@@ -2103,6 +2103,7 @@ def write_preflight_report_pdf(result: dict[str, Any], output_path: Path) -> Non
 def accessibility_pdf_bytes(pdf_bytes: bytes, password: str = "") -> dict[str, Any]:
     validation = validate_pdf_bytes(pdf_bytes, password)
     warnings: list[str] = []
+    title = ""
     title_present = False
     language = ""
     tagged = False
@@ -2114,7 +2115,8 @@ def accessibility_pdf_bytes(pdf_bytes: bytes, password: str = "") -> dict[str, A
         with fitz.open(stream=pdf_bytes, filetype="pdf") as document:
             if document.needs_pass:
                 authenticate_if_needed(document, password)
-            title_present = bool((document.metadata or {}).get("title"))
+            title = str((document.metadata or {}).get("title") or "")
+            title_present = bool(title)
             language = catalog_language(document)
             tagged = document_has_tag_structure(document)
             for page in document:
@@ -2142,6 +2144,7 @@ def accessibility_pdf_bytes(pdf_bytes: bytes, password: str = "") -> dict[str, A
         "ok": validation["ok"] and not warnings,
         "validation": validation,
         "warnings": warnings,
+        "title": title,
         "titlePresent": title_present,
         "language": language,
         "tagged": tagged,

@@ -38,6 +38,21 @@ async function createSamplePdf(filePath: string): Promise<void> {
   await fs.writeFile(filePath, await document.save());
 }
 
+async function createTextOnlyPdf(filePath: string, text: string): Promise<void> {
+  await fs.mkdir(path.dirname(filePath), { recursive: true });
+  const document = await PDFDocument.create();
+  const page = document.addPage([612, 792]);
+  const font = await document.embedFont(StandardFonts.Helvetica);
+  page.drawText(text, {
+    x: 72,
+    y: 700,
+    size: 18,
+    font,
+    color: rgb(0.1, 0.12, 0.15),
+  });
+  await fs.writeFile(filePath, await document.save());
+}
+
 async function createCrossPageFlowPdf(filePath: string): Promise<void> {
   await fs.mkdir(path.dirname(filePath), { recursive: true });
   const document = await PDFDocument.create();
@@ -159,6 +174,28 @@ function runPython(script: string, args: string[] = []): Promise<string> {
   });
 }
 
+function runCommand(command: string, args: string[] = []): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const resolved = command === "python3" ? enginePython : command;
+    const child = spawn(resolved, args, {
+      cwd: process.cwd(),
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    const stdout: Buffer[] = [];
+    const stderr: Buffer[] = [];
+    child.stdout.on("data", (chunk: Buffer) => stdout.push(chunk));
+    child.stderr.on("data", (chunk: Buffer) => stderr.push(chunk));
+    child.on("error", reject);
+    child.on("close", (code) => {
+      if (code !== 0) {
+        reject(new Error(`${resolved} ${args.join(" ")} exited ${code}: ${Buffer.concat(stderr).toString("utf8")}`));
+        return;
+      }
+      resolve(Buffer.concat(stdout).toString("utf8"));
+    });
+  });
+}
+
 async function createExistingAnnotationPdf(filePath: string): Promise<void> {
   await fs.mkdir(path.dirname(filePath), { recursive: true });
   await runPython(
@@ -214,6 +251,47 @@ async function createChoiceFormPdf(filePath: string): Promise<void> {
   await fs.writeFile(filePath, await document.save());
 }
 
+async function createScannedPdf(filePath: string, text = "OCR UI TEST 123"): Promise<void> {
+  await fs.mkdir(path.dirname(filePath), { recursive: true });
+  await runPython(
+    [
+      "import fitz, sys",
+      "text = sys.argv[2]",
+      "text_doc = fitz.open()",
+      "text_page = text_doc.new_page(width=612, height=792)",
+      "text_page.insert_text((72, 220), text, fontsize=56, fontname='helv')",
+      "pix = text_page.get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)",
+      "image_bytes = pix.tobytes('png')",
+      "scan_doc = fitz.open()",
+      "scan_page = scan_doc.new_page(width=612, height=792)",
+      "scan_page.insert_image(scan_page.rect, stream=image_bytes)",
+      "scan_doc.save(sys.argv[1], garbage=4, deflate=True, clean=True)",
+      "scan_doc.close()",
+      "text_doc.close()",
+    ].join("\n"),
+    [filePath, text],
+  );
+}
+
+async function createCertificate(certPath: string, keyPath: string): Promise<void> {
+  await fs.mkdir(path.dirname(certPath), { recursive: true });
+  await runCommand("openssl", [
+    "req",
+    "-x509",
+    "-newkey",
+    "rsa:2048",
+    "-nodes",
+    "-keyout",
+    keyPath,
+    "-out",
+    certPath,
+    "-subj",
+    "/CN=PDFeditor UI Test Signer",
+    "-days",
+    "3",
+  ]);
+}
+
 async function annotationCount(filePath: string): Promise<number> {
   const stdout = await runPython(
     [
@@ -267,6 +345,28 @@ async function pageImageCounts(filePath: string): Promise<number[]> {
     [filePath],
   );
   return JSON.parse(stdout) as number[];
+}
+
+async function signatureValidation(filePath: string): Promise<{ ok: boolean; signatureCount: number; signedWidgetCount: number }> {
+  const stdout = await runCommand("python3", [
+    path.join(root, "engine", "pdf_engine.py"),
+    "signature-validate",
+    "--input",
+    filePath,
+    "--stdout",
+  ]);
+  return JSON.parse(stdout) as { ok: boolean; signatureCount: number; signedWidgetCount: number };
+}
+
+async function accessibilityReport(filePath: string): Promise<{ title: string; language: string; imageAltTextCount: number }> {
+  const stdout = await runCommand("python3", [
+    path.join(root, "engine", "pdf_engine.py"),
+    "accessibility",
+    "--input",
+    filePath,
+    "--stdout",
+  ]);
+  return JSON.parse(stdout) as { title: string; language: string; imageAltTextCount: number };
 }
 
 async function expectDocumentLoaded(page: Page, pageCountText = "1쪽"): Promise<void> {
@@ -588,6 +688,34 @@ test("reflows paragraph without overlapping figure and caption when solver has s
   expect(overlap).toBe(false);
 });
 
+test("moves an existing PDF image through the engine instead of deleting it", async ({ page }) => {
+  const samplePath = path.resolve("tmp/sample-image-move-ui.pdf");
+  const exportedPath = path.resolve("tmp/exported-image-move-ui.pdf");
+  await createImageCollisionPdf(samplePath);
+  expect((await pageImageCounts(samplePath))[0]).toBe(1);
+
+  await page.goto("http://127.0.0.1:5173/");
+  await page
+    .locator('input[type="file"][accept="application/pdf"]')
+    .setInputFiles(samplePath);
+  await expect(page.locator(".source-image").first()).toBeVisible();
+  await page.locator(".source-image").first().click();
+  await expect(page.locator(".annotation.redact.selected")).toBeVisible();
+  await page.locator("#posX").fill("55");
+  await page.locator("#posX").press("Enter");
+  await page.locator("#posY").fill("45");
+  await page.locator("#posY").press("Enter");
+
+  const downloadPromise = page.waitForEvent("download");
+  await page.getByRole("button", { name: "PDF 내보내기" }).click();
+  const download = await downloadPromise;
+  await download.saveAs(exportedPath);
+
+  expect((await pageImageCounts(exportedPath))[0]).toBe(1);
+  const exportedText = await extractPdfText(exportedPath);
+  expect(exportedText).toContain("Figure 1. Protected image area");
+});
+
 test("blocks export only when semantic layout solver cannot resolve", async ({ page }) => {
   const samplePath = path.resolve("tmp/sample-image-collision.pdf");
   await createImageCollisionPdf(samplePath);
@@ -666,7 +794,7 @@ test("saves metadata and duplicated pages through the advanced save pipeline", a
   await expect(page.locator(".page-shell canvas")).toBeVisible();
 
   await page.locator("#saveMode").selectOption("native");
-  await page.locator(".metadata-panel summary").click();
+  await expect(page.locator("#metaTitle")).toBeVisible();
   await page.locator("#metaTitle").fill("Advanced PDF Studio Export");
   await page.locator("#metaTitle").blur();
   await page.locator("#metaAuthor").fill("HHSOLL");
@@ -701,6 +829,136 @@ test("runs preflight from the inspector without an inert command button", async 
   await expect(page.locator(".preflight-panel")).toContainText("사전 검사");
   await expect(page.locator(".preflight-panel")).toContainText("1쪽");
   await expect(page.locator("#toast")).toContainText("사전 검사");
+});
+
+test("runs OCR correction from the inspector and exports searchable PDF text", async ({ page }) => {
+  const samplePath = path.resolve("tmp/sample-ocr-ui.pdf");
+  const exportedPath = path.resolve("tmp/exported-ocr-ui.pdf");
+  await createScannedPdf(samplePath, "OCR UI TEST 123");
+  expect((await extractPdfText(samplePath)).trim()).toBe("");
+
+  await page.goto("http://127.0.0.1:5173/");
+  await page
+    .locator('input[type="file"][accept="application/pdf"]')
+    .setInputFiles(samplePath);
+  await expectDocumentLoaded(page);
+
+  await page.locator("#ocrCorrectionText").fill("Corrected OCR UI text 987");
+  const downloadPromise = page.waitForEvent("download");
+  await page.locator("#ocrCorrectButton").click();
+  const download = await downloadPromise;
+  await download.saveAs(exportedPath);
+
+  const exportedText = await extractPdfText(exportedPath);
+  expect(exportedText).toContain("Corrected OCR UI text 987");
+});
+
+test("signs a PDF with a certificate from the inspector and validates the signed structure", async ({ page }) => {
+  const samplePath = path.resolve("tmp/sample-sign-ui.pdf");
+  const certPath = path.resolve("tmp/ui-signer.crt");
+  const keyPath = path.resolve("tmp/ui-signer.key");
+  const exportedPath = path.resolve("tmp/exported-sign-ui.pdf");
+  await createSamplePdf(samplePath);
+  await createCertificate(certPath, keyPath);
+
+  await page.goto("http://127.0.0.1:5173/");
+  await page
+    .locator('input[type="file"][accept="application/pdf"]')
+    .setInputFiles(samplePath);
+  await expectDocumentLoaded(page);
+  await page.locator("#certificateInput").setInputFiles(certPath);
+  await page.locator("#certificateKeyInput").setInputFiles(keyPath);
+  await page.locator("#certificateSignerName").fill("UI Certificate Signer");
+
+  const downloadPromise = page.waitForEvent("download");
+  await page.locator("#certificateSignButton").click();
+  const download = await downloadPromise;
+  await download.saveAs(exportedPath);
+
+  const validation = await signatureValidation(exportedPath);
+  expect(validation.ok).toBe(true);
+  expect(validation.signatureCount).toBe(1);
+  expect(validation.signedWidgetCount).toBe(1);
+});
+
+test("repairs basic accessibility metadata from the inspector", async ({ page }) => {
+  const samplePath = path.resolve("tmp/sample-accessibility-ui.pdf");
+  const exportedPath = path.resolve("tmp/exported-accessibility-ui.pdf");
+  await createScannedPdf(samplePath, "ALT IMAGE SOURCE 456");
+
+  await page.goto("http://127.0.0.1:5173/");
+  await page
+    .locator('input[type="file"][accept="application/pdf"]')
+    .setInputFiles(samplePath);
+  await expectDocumentLoaded(page);
+  await page.locator("#metaTitle").fill("Accessible UI Smoke");
+  await page.locator("#metaTitle").blur();
+  await page.locator("#accessibilityLanguage").fill("ko-KR");
+  await page.locator("#accessibilityAltText").fill("Scanned contract page image");
+
+  const downloadPromise = page.waitForEvent("download");
+  await page.locator("#accessibilityRepairButton").click();
+  const download = await downloadPromise;
+  await download.saveAs(exportedPath);
+
+  const report = await accessibilityReport(exportedPath);
+  expect(report.title).toBe("Accessible UI Smoke");
+  expect(report.language).toBe("ko-KR");
+  expect(report.imageAltTextCount).toBeGreaterThanOrEqual(1);
+});
+
+test("compares two PDFs from the inspector and exports a real compare report", async ({ page }) => {
+  const leftPath = path.resolve("tmp/sample-compare-left-ui.pdf");
+  const rightPath = path.resolve("tmp/sample-compare-right-ui.pdf");
+  const reportPath = path.resolve("tmp/exported-compare-report-ui.pdf");
+  await createTextOnlyPdf(leftPath, "Compare left product text");
+  await createTextOnlyPdf(rightPath, "Compare right product text");
+
+  await page.goto("http://127.0.0.1:5173/");
+  await page
+    .locator('input[type="file"][accept="application/pdf"]')
+    .setInputFiles(leftPath);
+  await expectDocumentLoaded(page);
+  await page.locator("#compareInput").setInputFiles(rightPath);
+  await expect(page.locator("#compareRunButton")).toBeEnabled();
+
+  const downloadPromise = page.waitForEvent("download");
+  await page.locator("#compareRunButton").click();
+  const download = await downloadPromise;
+  await download.saveAs(reportPath);
+
+  await expect(page.locator(".preflight-panel")).toContainText("비교 결과");
+  await expect(page.locator(".preflight-panel")).toContainText("변경 1쪽");
+  const reportText = await extractPdfText(reportPath);
+  expect(reportText).toContain("PDF Compare Report");
+  expect(reportText).toContain("Compare left product text");
+  expect(reportText).toContain("Compare right product text");
+});
+
+test("runs batch automation from the inspector and writes structural PDF changes", async ({ page }) => {
+  const samplePath = path.resolve("tmp/sample-batch-ui.pdf");
+  const exportedPath = path.resolve("tmp/exported-batch-ui.pdf");
+  await createTextOnlyPdf(samplePath, "Visible paragraph with BATCH_UI_SECRET value");
+  expect(await extractPdfText(samplePath)).toContain("BATCH_UI_SECRET");
+
+  await page.goto("http://127.0.0.1:5173/");
+  await page
+    .locator('input[type="file"][accept="application/pdf"]')
+    .setInputFiles(samplePath);
+  await expectDocumentLoaded(page);
+  await page.locator("#batchWatermarkText").fill("Batch UI watermark");
+  await page.locator("#batchRedactText").fill("BATCH_UI_SECRET");
+  await expect(page.locator("#batchRunButton")).toBeEnabled();
+
+  const downloadPromise = page.waitForEvent("download");
+  await page.locator("#batchRunButton").click();
+  const download = await downloadPromise;
+  await download.saveAs(exportedPath);
+
+  await expect(page.locator(".preflight-panel")).toContainText("배치 결과");
+  const exportedText = await extractPdfText(exportedPath);
+  expect(exportedText).toContain("Batch UI watermark");
+  expect(exportedText).not.toContain("BATCH_UI_SECRET");
 });
 
 test("imports existing PDF annotations and exports real annotation deletion", async ({

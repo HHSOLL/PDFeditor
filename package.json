@@ -12,7 +12,12 @@
     "ensure:qpdf": "node tests/ensure-qpdf.mjs",
     "ensure:ocr": "node tests/ensure-ocr.mjs",
     "test:engine": "node tests/run-engine-tests.mjs",
+    "test:corpus": "REQUIRE_QPDF=1 node tests/engine-corpus-100.mjs",
+    "test:release-smoke": "node tests/release-smoke.mjs",
+    "package:local": "node scripts/package-local.mjs",
+    "test:package-smoke": "npm run package:local && node tests/package-smoke.mjs",
     "test:e2e": "playwright test",
+    "verify:external": "npm run verify:local && npm run test:corpus && npm run test:release-smoke && npm run test:package-smoke",
     "verify:local": "npm run ensure:qpdf && npm run ensure:ocr && REQUIRE_QPDF=1 VITE_STRICT_ENGINE=true npm run build && REQUIRE_QPDF=1 REQUIRE_OCR=1 npm run test:engine && REQUIRE_QPDF=1 VITE_STRICT_ENGINE=true npm run test:e2e -- --reporter=list && npm audit --audit-level=moderate",
     "preview": "vite preview --host 127.0.0.1"
   },

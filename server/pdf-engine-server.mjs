@@ -2,7 +2,7 @@
 import { createServer } from "node:http";
 import { spawn } from "node:child_process";
 import { createReadStream, existsSync } from "node:fs";
-import { readFile } from "node:fs/promises";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -60,6 +60,20 @@ const server = createServer(async (request, response) => {
     if (request.method === "POST" && request.url === "/api/pdf/preflight") {
       const payload = await readJsonBody(request);
       const result = await runEngine(["preflight", "--stdin", "--stdout"], payload);
+      sendJson(response, 200, result);
+      return;
+    }
+
+    if (request.method === "POST" && request.url === "/api/pdf/compare") {
+      const payload = await readJsonBody(request);
+      const result = await runCompare(payload);
+      sendJson(response, 200, result);
+      return;
+    }
+
+    if (request.method === "POST" && request.url === "/api/pdf/batch") {
+      const payload = await readJsonBody(request);
+      const result = await runBatch(payload);
       sendJson(response, 200, result);
       return;
     }
@@ -208,6 +222,63 @@ async function runExtract(payload) {
     return output;
   } finally {
     await import("node:fs/promises").then((fs) => fs.rm(inputPath, { force: true }));
+  }
+}
+
+async function runCompare(payload) {
+  const tempDir = path.join(root, "tmp", "engine-api", `compare-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+  await mkdir(tempDir, { recursive: true });
+  const leftPath = path.join(tempDir, "left.pdf");
+  const rightPath = path.join(tempDir, "right.pdf");
+  const reportPath = path.join(tempDir, "compare-report.pdf");
+  try {
+    await writeFile(leftPath, Buffer.from(String(payload.leftBase64 || ""), "base64"));
+    await writeFile(rightPath, Buffer.from(String(payload.rightBase64 || ""), "base64"));
+    const args = ["compare", "--input", leftPath, "--other", rightPath, "--stdout"];
+    if (payload.report !== false) {
+      args.push("--report", reportPath);
+    }
+    const result = await runEngine(args, {});
+    if (existsSync(reportPath)) {
+      result.reportBase64 = (await readFile(reportPath)).toString("base64");
+    }
+    return result;
+  } finally {
+    await rm(tempDir, { force: true, recursive: true });
+  }
+}
+
+async function runBatch(payload) {
+  const tempDir = path.join(root, "tmp", "engine-api", `batch-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+  await mkdir(tempDir, { recursive: true });
+  const jobs = Array.isArray(payload.jobs) ? payload.jobs : [];
+  const manifest = { jobs: [] };
+  try {
+    for (const [index, job] of jobs.entries()) {
+      const inputName = `job-${index}-input.pdf`;
+      const outputName = `job-${index}-output.pdf`;
+      await writeFile(path.join(tempDir, inputName), Buffer.from(String(job.pdfBase64 || ""), "base64"));
+      manifest.jobs.push({
+        input: inputName,
+        output: outputName,
+        payload: job.payload || {},
+      });
+    }
+    const manifestPath = path.join(tempDir, "manifest.json");
+    await writeFile(manifestPath, JSON.stringify(manifest), "utf8");
+    const result = await runEngine(["batch", "--manifest", manifestPath, "--stdout"], {});
+    for (const job of result.jobs || []) {
+      if (!job || typeof job.index !== "number") {
+        continue;
+      }
+      const outputPath = path.join(tempDir, `job-${job.index}-output.pdf`);
+      if (existsSync(outputPath)) {
+        job.pdfBase64 = (await readFile(outputPath)).toString("base64");
+      }
+    }
+    return result;
+  } finally {
+    await rm(tempDir, { force: true, recursive: true });
   }
 }
 

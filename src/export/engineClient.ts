@@ -2,7 +2,10 @@ import { base64ToBytes, bytesToBase64 } from "../base64";
 import { isPreflightReport, validationPreflightFallback } from "../preflightReport";
 import type {
   AccessibilityRepairRequest,
+  BatchJobRequest,
+  BatchResult,
   CertificateSignRequest,
+  CompareResult,
   EngineApplyResponse,
   EnginePayload,
   ExportValidation,
@@ -198,6 +201,58 @@ export async function validateSignatureWithEngine(bytes: Uint8Array): Promise<Si
   return null;
 }
 
+export async function comparePdfWithEngine(
+  leftBytes: Uint8Array,
+  rightBytes: Uint8Array,
+  report = true,
+): Promise<CompareResult | null> {
+  const endpoints = buildEngineEndpoints("/api/pdf/compare");
+  for (const endpoint of endpoints) {
+    try {
+      const response = await postJson(endpoint, {
+        leftBase64: bytesToBase64(leftBytes),
+        rightBase64: bytesToBase64(rightBytes),
+        report,
+      });
+      if (!response.ok) {
+        continue;
+      }
+      const result: unknown = await response.json();
+      if (isCompareResult(result)) {
+        return result;
+      }
+    } catch (error) {
+      console.warn(`PDF engine compare failed at ${endpoint}`, error);
+    }
+  }
+  return null;
+}
+
+export async function batchPdfWithEngine(jobs: BatchJobRequest[]): Promise<BatchResult | null> {
+  const endpoints = buildEngineEndpoints("/api/pdf/batch");
+  for (const endpoint of endpoints) {
+    try {
+      const response = await postJson(endpoint, {
+        jobs: jobs.map((job) => ({
+          fileName: job.fileName,
+          pdfBase64: bytesToBase64(job.bytes),
+          payload: job.payload,
+        })),
+      });
+      if (!response.ok) {
+        continue;
+      }
+      const result: unknown = await response.json();
+      if (isBatchResult(result)) {
+        return result;
+      }
+    } catch (error) {
+      console.warn(`PDF engine batch failed at ${endpoint}`, error);
+    }
+  }
+  return null;
+}
+
 export async function validatePdfWithEngine(bytes: Uint8Array): Promise<ExportValidation | null> {
   const endpoints = buildEngineEndpoints("/api/pdf/validate");
   for (const endpoint of endpoints) {
@@ -273,5 +328,32 @@ function isSignatureValidation(value: unknown): value is SignatureValidation {
     typeof candidate.ok === "boolean" &&
     typeof candidate.signatureCount === "number" &&
     Array.isArray(candidate.signatures)
+  );
+}
+
+function isCompareResult(value: unknown): value is CompareResult {
+  if (typeof value !== "object" || value === null) {
+    return false;
+  }
+  const candidate = value as Record<string, unknown>;
+  return (
+    typeof candidate.ok === "boolean" &&
+    Array.isArray(candidate.changedPages) &&
+    Array.isArray(candidate.textChanges) &&
+    Array.isArray(candidate.renderChanges)
+  );
+}
+
+function isBatchResult(value: unknown): value is BatchResult {
+  if (typeof value !== "object" || value === null) {
+    return false;
+  }
+  const candidate = value as Record<string, unknown>;
+  return (
+    typeof candidate.ok === "boolean" &&
+    typeof candidate.jobCount === "number" &&
+    typeof candidate.successCount === "number" &&
+    typeof candidate.failureCount === "number" &&
+    Array.isArray(candidate.jobs)
   );
 }

@@ -461,6 +461,50 @@ export interface SignatureValidation {
   errors: string[];
 }
 
+export interface CompareResult {
+  ok: boolean;
+  leftPageCount: number;
+  rightPageCount: number;
+  pageCountChanged: boolean;
+  changedPages: number[];
+  changedPageCount: number;
+  textChanges: Array<{
+    pageIndex: number;
+    type?: string;
+    leftPreview: string;
+    rightPreview: string;
+  }>;
+  renderChanges: Array<{
+    pageIndex: number;
+    meanPixelDelta: number;
+    changedRegion?: number[];
+  }>;
+  reportBase64?: string;
+  errors: string[];
+}
+
+export interface BatchJobRequest {
+  fileName: string;
+  bytes: Uint8Array;
+  payload: EnginePayload;
+}
+
+export interface BatchResult {
+  ok: boolean;
+  jobCount: number;
+  successCount: number;
+  failureCount: number;
+  jobs: Array<{
+    index: number;
+    ok: boolean;
+    input?: string;
+    output?: string;
+    pdfBase64?: string;
+    validation?: ExportValidation;
+    error?: string;
+  }>;
+}
+
 export interface PdfTextItem {
   str: string;
   fontName: string;
