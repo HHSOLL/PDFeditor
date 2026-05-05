@@ -88,6 +88,7 @@ let annotations: Annotation[] = [];
 let deletedSourceAnnotations: SourceAnnotationRef[] = [];
 let sourceTextItemsByPage = new Map<string, SourceTextItem[]>();
 let sourceImageItemsByPage = new Map<string, SourceImageItem[]>();
+let sourceVectorItemsByPage = new Map<string, SourceVectorItem[]>();
 let pageCanvasSnapshots = new Map<string, string>();
 let documentMetadata: DocumentMetadata = emptyMetadata();
 let saveMode: SaveMode = "flatten";
@@ -99,6 +100,8 @@ let lastSignatureValidation: SignatureValidation | null = null;
 let compareBytes: Uint8Array | null = null;
 let compareFileName = "";
 let lastCompareResult: CompareResult | null = null;
+let compareRegionOverlaysVisible = true;
+let batchActionName = "기본 배치 작업";
 let batchWatermarkText = "Batch watermark";
 let batchRedactText = "";
 let batchSanitizeHiddenInfo = true;
@@ -233,12 +236,36 @@ registerCommand({
   run: () => void runCompareWithSelectedPdf(),
 });
 registerCommand({
+  id: "compare-first-change",
+  label: "첫 변경으로 이동",
+  implemented: true,
+  enabled: () => Boolean(lastCompareResult?.changedPages.length),
+  disabledReason: () => "먼저 PDF 비교를 실행하세요.",
+  run: goToFirstCompareChange,
+});
+registerCommand({
   id: "batch-run",
   label: "배치 실행",
   implemented: true,
   enabled: () => Boolean(originalBytes && pdfDocument && (batchWatermarkText.trim() || batchRedactText.trim() || batchSanitizeHiddenInfo)),
   disabledReason: () => "PDF를 열고 배치 단계 하나 이상을 설정하세요.",
   run: () => void runBatchQuickAction(),
+});
+registerCommand({
+  id: "batch-save-preset",
+  label: "배치 프리셋 저장",
+  implemented: true,
+  enabled: () => Boolean(batchActionName.trim() && (batchWatermarkText.trim() || batchRedactText.trim() || batchSanitizeHiddenInfo)),
+  disabledReason: () => "프리셋 이름과 배치 단계 하나 이상을 입력하세요.",
+  run: saveBatchPreset,
+});
+registerCommand({
+  id: "batch-load-preset",
+  label: "배치 프리셋 불러오기",
+  implemented: true,
+  enabled: () => hasSavedBatchPreset(),
+  disabledReason: () => "저장된 배치 프리셋이 없습니다.",
+  run: loadBatchPreset,
 });
 registerCommand({
   id: "undo",
@@ -359,7 +386,7 @@ type PageMetrics = {
 type LayoutBlock = {
   id: string;
   pageId: string;
-  type: "text" | "image" | "caption" | "figure";
+  type: "text" | "image" | "caption" | "figure" | "table";
   bbox: NormalizedRect;
   flowId: string;
   movable: boolean;
@@ -386,12 +413,30 @@ type EngineExtractImage = {
   width: number;
   height: number;
 };
+type EngineExtractDrawing = EngineExtractImage & {
+  stroke?: string;
+  fill?: string;
+  strokeWidth?: number;
+};
 type EngineExtractPage = {
   index: number;
   images?: EngineExtractImage[];
+  drawings?: EngineExtractDrawing[];
 };
 type EngineExtractResponse = {
   pages: EngineExtractPage[];
+};
+type SourceVectorItem = {
+  id: string;
+  pageId: string;
+  sourceVectorId: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  stroke?: string;
+  fill?: string;
+  strokeWidth?: number;
 };
 function bindCommandButton(id: string, commandId: string): void {
   const element = document.getElementById(id);
@@ -565,6 +610,7 @@ function bindStaticEvents(): void {
       compareBytes = new Uint8Array(buffer);
       compareFileName = file.name;
       lastCompareResult = null;
+      renderCurrentLayer();
       showToast(`${file.name} 비교 PDF를 불러왔습니다.`);
       renderInspector();
     });
@@ -704,6 +750,7 @@ async function loadPdfBytes(bytes: Uint8Array, nextFileName: string, message: st
   deletedSourceAnnotations = [];
   sourceTextItemsByPage = new Map();
   sourceImageItemsByPage = new Map();
+  sourceVectorItemsByPage = new Map();
   pageCanvasSnapshots = new Map();
   documentMetadata = await readDocumentMetadata(pdfDocument);
   saveMode = "flatten";
@@ -1447,6 +1494,29 @@ function renderSourceImageItem(item: SourceImageItem, metrics: PageMetrics): HTM
   return button;
 }
 
+function renderSourceVectorItem(item: SourceVectorItem, metrics: PageMetrics): HTMLButtonElement {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "source-vector";
+  button.ariaLabel = "기존 PDF 벡터 객체 삭제 대상으로 선택";
+  button.style.left = `${item.x * metrics.width}px`;
+  button.style.top = `${item.y * metrics.height}px`;
+  button.style.width = `${item.width * metrics.width}px`;
+  button.style.height = `${item.height * metrics.height}px`;
+  button.title = "기존 PDF 벡터 객체 삭제";
+  button.addEventListener("pointerdown", (event) => {
+    if (currentTool !== "select") {
+      return;
+    }
+    event.stopPropagation();
+    currentPageId = item.pageId;
+    setActivePageMetrics(item.pageId);
+    updateCurrentPageIndicators();
+    convertSourceVectorToRedaction(item);
+  });
+  return button;
+}
+
 function renderCurrentLayer(): void {
   document.querySelectorAll<HTMLElement>(".annotation-layer").forEach((layer) => {
     const pageId = layer.dataset.pageId;
@@ -1470,17 +1540,22 @@ function refreshFlowEffects(): void {
     if (!pageId || !item || !metrics) {
       return;
     }
-    layer.querySelectorAll(".source-mask, .source-text, .source-image, .flow-slice").forEach((node) => node.remove());
+    layer.querySelectorAll(".source-mask, .source-text, .source-image, .flow-slice, .compare-region").forEach((node) => node.remove());
     const flowSlices = pageFlowSlicesForPage(item.id);
+    const pageIndex = pageItems.findIndex((candidate) => candidate.id === item.id);
     const flowNodes = [
       ...sourceMasksForPage(item.id).map((mask) => renderSourceMask(mask, metrics)),
       ...flowSlices.map((slice) => renderPageFlowSlice(slice, metrics)),
+      ...compareRegionsForPageIndex(pageIndex).map((region) => renderCompareRegion(region, metrics)),
       ...(flowSlices.length > 0
         ? []
         : flowedSourceTextsForPage(item.id).map((flowedText) => renderFlowedSourceText(flowedText, metrics))),
       ...(sourceImageItemsByPage.get(item.id) ?? [])
         .filter((sourceImage) => !isSourceImageAlreadyEdited(sourceImage.id))
         .map((sourceImage) => renderSourceImageItem(sourceImage, metrics)),
+      ...(sourceVectorItemsByPage.get(item.id) ?? [])
+        .filter((sourceVector) => !isSourceVectorAlreadyEdited(sourceVector.id))
+        .map((sourceVector) => renderSourceVectorItem(sourceVector, metrics)),
       ...(sourceTextItemsByPage.get(item.id) ?? [])
         .filter((sourceText) => !isSourceTextAlreadyEdited(sourceText.id) && !semanticReflowTarget(sourceText))
         .map((sourceText) => renderSourceTextItem(sourceText, metrics)),
@@ -1545,9 +1620,54 @@ function renderLayerContents(layer: HTMLElement, item: PageItem, metrics: PageMe
     }
   }
 
+  for (const sourceVector of sourceVectorItemsByPage.get(item.id) ?? []) {
+    if (!isSourceVectorAlreadyEdited(sourceVector.id)) {
+      layer.append(renderSourceVectorItem(sourceVector, metrics));
+    }
+  }
+
+  const pageIndex = pageItems.findIndex((candidate) => candidate.id === item.id);
+  for (const region of compareRegionsForPageIndex(pageIndex)) {
+    layer.append(renderCompareRegion(region, metrics));
+  }
+
   for (const annotation of annotations.filter((ann) => ann.pageId === item.id)) {
     layer.append(renderAnnotation(annotation, metrics));
   }
+}
+
+function compareRegionsForPageIndex(pageIndex: number): Array<{ pageIndex: number; meanPixelDelta: number; changedRegion: number[] }> {
+  if (!compareRegionOverlaysVisible || pageIndex < 0 || !lastCompareResult) {
+    return [];
+  }
+  return lastCompareResult.renderChanges
+    .filter((change) => change.pageIndex === pageIndex && Array.isArray(change.changedRegion) && change.changedRegion.length === 4)
+    .map((change) => ({
+      pageIndex: change.pageIndex,
+      meanPixelDelta: change.meanPixelDelta,
+      changedRegion: change.changedRegion ?? [0, 0, 0, 0],
+    }))
+    .filter(({ changedRegion }) => changedRegion[2] > changedRegion[0] && changedRegion[3] > changedRegion[1]);
+}
+
+function renderCompareRegion(
+  change: { pageIndex: number; meanPixelDelta: number; changedRegion: number[] },
+  metrics: PageMetrics,
+): HTMLDivElement {
+  const [rawX1, rawY1, rawX2, rawY2] = change.changedRegion;
+  const x1 = clamp(rawX1, 0, 1);
+  const y1 = clamp(rawY1, 0, 1);
+  const x2 = clamp(rawX2, x1, 1);
+  const y2 = clamp(rawY2, y1, 1);
+  const element = document.createElement("div");
+  element.className = "compare-region";
+  element.dataset.pageIndex = `${change.pageIndex}`;
+  element.style.left = `${x1 * metrics.width}px`;
+  element.style.top = `${y1 * metrics.height}px`;
+  element.style.width = `${Math.max(2, (x2 - x1) * metrics.width)}px`;
+  element.style.height = `${Math.max(2, (y2 - y1) * metrics.height)}px`;
+  element.title = `비교 변경 영역 · page ${change.pageIndex + 1} · delta ${change.meanPixelDelta.toFixed(5)}`;
+  return element;
 }
 
 function renderSourceMask(mask: SourceMask, metrics: PageMetrics): HTMLDivElement {
@@ -1778,6 +1898,7 @@ function semanticReflowCacheKey(): string {
     pageItems.map((item) => item.id).join(","),
     Array.from(sourceTextItemsByPage.values()).reduce((count, items) => count + items.length, 0),
     Array.from(sourceImageItemsByPage.values()).reduce((count, items) => count + items.length, 0),
+    Array.from(sourceVectorItemsByPage.values()).reduce((count, items) => count + items.length, 0),
     sourceEditKey,
   ].join(";");
 }
@@ -1803,6 +1924,23 @@ function layoutBlocksInDocument(): LayoutBlock[] {
       for (const caption of captionBlocksForImage(image)) {
         blocks.push(caption);
       }
+    }
+  }
+  for (const [pageId, vectors] of sourceVectorItemsByPage.entries()) {
+    for (const vector of vectors) {
+      if (isSourceVectorAlreadyEdited(vector.id)) {
+        continue;
+      }
+      blocks.push({
+        id: vector.id,
+        pageId,
+        type: "table",
+        bbox: vector,
+        flowId: flowIdForRect(vector),
+        movable: false,
+        protected: true,
+        sourceObjectId: vector.sourceVectorId,
+      });
     }
   }
   for (const [pageId, texts] of sourceTextItemsByPage.entries()) {
@@ -2171,6 +2309,7 @@ async function cacheSourceTextItems(): Promise<void> {
 
 async function cacheSourceImageItems(bytes: Uint8Array): Promise<void> {
   sourceImageItemsByPage = new Map();
+  sourceVectorItemsByPage = new Map();
   const endpoints = buildEngineEndpoints("/api/pdf/extract");
   for (const endpoint of endpoints) {
     try {
@@ -2205,6 +2344,22 @@ async function cacheSourceImageItems(bytes: Uint8Array): Promise<void> {
             y: clamp(image.y, 0, 0.999),
             width: clamp(image.width, 0.001, 1),
             height: clamp(image.height, 0.001, 1),
+          })),
+        );
+        const drawings = page?.drawings ?? [];
+        sourceVectorItemsByPage.set(
+          pageItem.id,
+          drawings.map((drawing, index) => ({
+            id: `${pageItem.id}:vector-${index}`,
+            pageId: pageItem.id,
+            sourceVectorId: drawing.id,
+            x: clamp(drawing.x, 0, 0.999),
+            y: clamp(drawing.y, 0, 0.999),
+            width: clamp(drawing.width, 0.001, 1),
+            height: clamp(drawing.height, 0.001, 1),
+            stroke: drawing.stroke,
+            fill: drawing.fill,
+            strokeWidth: drawing.strokeWidth,
           })),
         );
       }
@@ -2641,9 +2796,25 @@ function isSourceImageAlreadyEdited(sourceImageItemId: string): boolean {
   );
 }
 
+function isSourceVectorAlreadyEdited(sourceVectorItemId: string): boolean {
+  return annotations.some(
+    (annotation) => annotation.sourceVectorId === sourceVectorItemId,
+  );
+}
+
 function sourceImageItemById(sourceImageItemId: string): SourceImageItem | null {
   for (const items of sourceImageItemsByPage.values()) {
     const match = items.find((item) => item.id === sourceImageItemId);
+    if (match) {
+      return match;
+    }
+  }
+  return null;
+}
+
+function sourceVectorItemById(sourceVectorItemId: string): SourceVectorItem | null {
+  for (const items of sourceVectorItemsByPage.values()) {
+    const match = items.find((item) => item.id === sourceVectorItemId);
     if (match) {
       return match;
     }
@@ -2710,6 +2881,31 @@ function convertSourceImageToRedaction(item: SourceImageItem): void {
     opacity: 1,
     strokeWidth: 1,
     sourceImageId: item.id,
+    dirty: true,
+  };
+  annotations.push(annotation);
+  selectedId = annotation.id;
+  commitHistory();
+  renderInspector();
+  renderCurrentLayer();
+}
+
+function convertSourceVectorToRedaction(item: SourceVectorItem): void {
+  if (isSourceVectorAlreadyEdited(item.id)) {
+    return;
+  }
+  const annotation: BoxAnnotation = {
+    id: crypto.randomUUID(),
+    pageId: item.pageId,
+    type: "redact",
+    x: item.x,
+    y: item.y,
+    width: item.width,
+    height: item.height,
+    color: "#ffffff",
+    opacity: 1,
+    strokeWidth: 1,
+    sourceVectorId: item.id,
     dirty: true,
   };
   annotations.push(annotation);
@@ -3032,6 +3228,7 @@ function renderInspector(): void {
     ${pageControls}
     ${selected.type === "text" ? textFields(selected) : ""}
     ${selected.type === "formField" ? renderFormFieldInspector(selected, escapeHtml) : ""}
+    ${renderSourceObjectInspector(selected)}
     ${selected.type !== "image" && selected.type !== "formField" ? colorField(selected) : ""}
     ${selected.type !== "text" && selected.type !== "image" && selected.type !== "formField" ? opacityField(selected) : ""}
     ${selected.type === "pen" || selected.type === "rect" ? strokeField(selected) : ""}
@@ -3167,6 +3364,19 @@ function documentFields(): string {
       <p class="status-line">비교 대상 ${compareFileName ? escapeHtml(compareFileName) : "없음"}</p>
       ${lastCompareResult ? compareResultSummary(lastCompareResult) : ""}
       <div class="field">
+        <label class="checkbox-line">
+          <input id="compareOverlayVisible" type="checkbox"${compareRegionOverlaysVisible ? " checked" : ""} />
+          비교 변경 영역을 페이지 위에 표시
+        </label>
+      </div>
+      <div class="mini-actions">
+        <button id="compareFirstChangeButton" type="button">첫 변경으로 이동</button>
+      </div>
+      <div class="field">
+        <label>배치 액션 이름</label>
+        <input id="batchActionName" type="text" value="${escapeHtml(batchActionName)}" />
+      </div>
+      <div class="field">
         <label>배치 워터마크 텍스트</label>
         <input id="batchWatermarkText" type="text" value="${escapeHtml(batchWatermarkText)}" />
       </div>
@@ -3181,6 +3391,8 @@ function documentFields(): string {
         </label>
       </div>
       <div class="mini-actions">
+        <button id="batchSavePresetButton" type="button">프리셋 저장</button>
+        <button id="batchLoadPresetButton" type="button">프리셋 불러오기</button>
         <button id="batchRunButton" type="button">현재 PDF 배치 실행</button>
       </div>
       ${lastBatchResult ? batchResultSummary(lastBatchResult) : ""}
@@ -3241,6 +3453,30 @@ function batchResultSummary(report: BatchResult): string {
       <strong>배치 결과</strong>
       <small>${report.successCount}/${report.jobCount} 성공 · 실패 ${report.failureCount}</small>
       ${firstError ? `<p>${escapeHtml(firstError)}</p>` : "<p>현재 PDF 배치 결과를 PDF 구조에 저장했습니다.</p>"}
+    </div>
+  `;
+}
+
+function renderSourceObjectInspector(annotation: Annotation): string {
+  const sourceImage = annotation.sourceImageId ? sourceImageItemById(annotation.sourceImageId) : null;
+  const sourceVector = annotation.sourceVectorId ? sourceVectorItemById(annotation.sourceVectorId) : null;
+  const source = sourceImage ?? sourceVector;
+  if (!source) {
+    return "";
+  }
+  const kind = sourceImage ? "Image XObject" : "Vector drawing";
+  const action = sourceImage
+    ? rectChangedFromSourceImage(annotation, sourceImage)
+      ? "moveImage로 원본 이미지 제거 후 새 위치에 재삽입"
+      : "deleteImage로 원본 이미지 객체 제거"
+    : "deleteVector로 닿은 벡터 라인아트 제거";
+  return `
+    <div class="preflight-panel object-inspector">
+      <strong>PDF 객체 속성</strong>
+      <small>${kind} · ${escapeHtml(source.pageId)}</small>
+      <p>원본 객체: ${escapeHtml(sourceImage?.sourceImageId ?? sourceVector?.sourceVectorId ?? "")}</p>
+      <p>원본 bbox: ${Math.round(source.x * 1000) / 10}%, ${Math.round(source.y * 1000) / 10}% · ${Math.round(source.width * 1000) / 10}% × ${Math.round(source.height * 1000) / 10}%</p>
+      <p>저장 작업: ${action}</p>
     </div>
   `;
 }
@@ -3344,6 +3580,9 @@ function bindDocumentControls(): void {
   bindCommandButton("certificateSignButton", "certificate-sign");
   bindCommandButton("signatureValidateButton", "signature-validate");
   bindCommandButton("compareRunButton", "compare-run");
+  bindCommandButton("compareFirstChangeButton", "compare-first-change");
+  bindCommandButton("batchSavePresetButton", "batch-save-preset");
+  bindCommandButton("batchLoadPresetButton", "batch-load-preset");
   bindCommandButton("batchRunButton", "batch-run");
   byId<HTMLButtonElement>("selectCertificateButton")?.addEventListener("click", () => dom.certificateInput.click());
   byId<HTMLButtonElement>("selectCertificateKeyButton")?.addEventListener("click", () => dom.certificateKeyInput.click());
@@ -3390,6 +3629,16 @@ function bindDocumentToolFields(): void {
   const certificateLockPolicyField = document.querySelector<HTMLSelectElement>("#certificateLockPolicy");
   certificateLockPolicyField?.addEventListener("change", () => {
     certificateLockPolicy = certificateLockPolicyField.value as typeof certificateLockPolicy;
+  });
+  const compareOverlayVisibleField = document.querySelector<HTMLInputElement>("#compareOverlayVisible");
+  compareOverlayVisibleField?.addEventListener("change", () => {
+    compareRegionOverlaysVisible = compareOverlayVisibleField.checked;
+    renderCurrentLayer();
+  });
+  const batchActionNameField = document.querySelector<HTMLInputElement>("#batchActionName");
+  batchActionNameField?.addEventListener("input", () => {
+    batchActionName = batchActionNameField.value;
+    syncCommandButtons();
   });
   const batchWatermarkTextField = document.querySelector<HTMLInputElement>("#batchWatermarkText");
   batchWatermarkTextField?.addEventListener("input", () => {
@@ -3656,6 +3905,7 @@ function duplicateCurrentPage(): void {
   pageItems.splice(index + 1, 0, copy);
   cloneSourceTextItemsForPage(source.id, copy.id);
   cloneSourceImageItemsForPage(source.id, copy.id);
+  cloneSourceVectorItemsForPage(source.id, copy.id);
   const copiedAnnotations = annotations
     .filter((annotation) => annotation.pageId === source.id)
     .map((annotation) => {
@@ -3670,6 +3920,7 @@ function duplicateCurrentPage(): void {
       delete cloned.sourceAnnotationId;
       delete cloned.sourceAnnotationSubtype;
       delete cloned.sourceImageId;
+      delete cloned.sourceVectorId;
       cloned.dirty = true;
       return cloned;
     });
@@ -3699,6 +3950,18 @@ function cloneSourceImageItemsForPage(sourcePageId: string, targetPageId: string
     sourceItems.map((item, index) => ({
       ...item,
       id: `${targetPageId}:image-${index}`,
+      pageId: targetPageId,
+    })),
+  );
+}
+
+function cloneSourceVectorItemsForPage(sourcePageId: string, targetPageId: string): void {
+  const sourceItems = sourceVectorItemsByPage.get(sourcePageId) ?? [];
+  sourceVectorItemsByPage.set(
+    targetPageId,
+    sourceItems.map((item, index) => ({
+      ...item,
+      id: `${targetPageId}:vector-${index}`,
       pageId: targetPageId,
     })),
   );
@@ -4115,6 +4378,7 @@ async function runCompareWithSelectedPdf(): Promise<void> {
   }
   lastCompareResult = result;
   renderInspector();
+  renderCurrentLayer();
   if (result.reportBase64) {
     downloadNamedPdf(
       base64ToBytes(result.reportBase64),
@@ -4124,6 +4388,86 @@ async function runCompareWithSelectedPdf(): Promise<void> {
     return;
   }
   showToast(result.ok ? `비교 완료: ${result.changedPageCount}쪽 변경` : "PDF 비교 실패");
+}
+
+function goToFirstCompareChange(): void {
+  const pageIndex = lastCompareResult?.changedPages[0];
+  const item = typeof pageIndex === "number" ? pageItems[pageIndex] : null;
+  if (!item || typeof pageIndex !== "number") {
+    showToast("이동할 비교 변경 페이지가 없습니다.");
+    return;
+  }
+  currentPageId = item.id;
+  selectedId = null;
+  scrollPageIntoView(item.id);
+  updateCurrentPageIndicators();
+  renderInspector();
+  renderCurrentLayer();
+  showToast(`${pageIndex + 1}쪽의 첫 비교 변경 영역으로 이동했습니다.`);
+}
+
+type BatchPreset = {
+  name: string;
+  watermarkText: string;
+  redactText: string;
+  sanitizeHiddenInfo: boolean;
+};
+
+const batchPresetStorageKey = "pdfedit.batchActionPreset.v1";
+
+function currentBatchPreset(): BatchPreset {
+  return {
+    name: batchActionName.trim() || "기본 배치 작업",
+    watermarkText: batchWatermarkText,
+    redactText: batchRedactText,
+    sanitizeHiddenInfo: batchSanitizeHiddenInfo,
+  };
+}
+
+function hasSavedBatchPreset(): boolean {
+  try {
+    return Boolean(window.localStorage.getItem(batchPresetStorageKey));
+  } catch {
+    return false;
+  }
+}
+
+function saveBatchPreset(): void {
+  const preset = currentBatchPreset();
+  try {
+    window.localStorage.setItem(batchPresetStorageKey, JSON.stringify(preset));
+  } catch {
+    showToast("브라우저 저장소에 배치 프리셋을 저장할 수 없습니다.");
+    return;
+  }
+  batchActionName = preset.name;
+  renderInspector();
+  showToast(`배치 프리셋 "${preset.name}"을 저장했습니다.`);
+}
+
+function loadBatchPreset(): void {
+  let raw: string | null = null;
+  try {
+    raw = window.localStorage.getItem(batchPresetStorageKey);
+  } catch {
+    raw = null;
+  }
+  if (!raw) {
+    showToast("저장된 배치 프리셋이 없습니다.");
+    return;
+  }
+  try {
+    const parsed = JSON.parse(raw) as Partial<BatchPreset>;
+    batchActionName = typeof parsed.name === "string" && parsed.name.trim() ? parsed.name : "기본 배치 작업";
+    batchWatermarkText = typeof parsed.watermarkText === "string" ? parsed.watermarkText : "";
+    batchRedactText = typeof parsed.redactText === "string" ? parsed.redactText : "";
+    batchSanitizeHiddenInfo = Boolean(parsed.sanitizeHiddenInfo);
+  } catch {
+    showToast("저장된 배치 프리셋을 읽을 수 없습니다.");
+    return;
+  }
+  renderInspector();
+  showToast(`배치 프리셋 "${batchActionName}"을 불러왔습니다.`);
 }
 
 async function runBatchQuickAction(): Promise<void> {
@@ -4265,6 +4609,9 @@ function requiresPdfEngineForSafeExport(): boolean {
     deletedSourceAnnotations.length > 0 ||
     annotations.some((annotation) => {
       if (annotation.sourceImageId) {
+        return true;
+      }
+      if (annotation.sourceVectorId) {
         return true;
       }
       if (annotation.sourceAnnotationId) {
@@ -4507,6 +4854,14 @@ function annotationToEngineOperation(annotation: Annotation, pageIndex: number):
     };
   }
 
+  if (annotation.sourceVectorId && annotation.type === "redact") {
+    return {
+      ...base,
+      type: "deleteVector",
+      sourceVectorId: sourceVectorItemById(annotation.sourceVectorId)?.sourceVectorId ?? annotation.sourceVectorId,
+    };
+  }
+
   if (annotation.type === "text") {
     return {
       ...base,
@@ -4568,23 +4923,28 @@ function isEngineExtractResponse(value: unknown): value is EngineExtractResponse
     }
     const page = rawPage as Record<string, unknown>;
     const images = page.images;
+    const drawings = page.drawings;
+    const validBox = (rawItem: unknown): rawItem is Record<string, unknown> => {
+      if (typeof rawItem !== "object" || rawItem === null) {
+        return false;
+      }
+      const item = rawItem as Record<string, unknown>;
+      return (
+        typeof item.id === "string" &&
+        typeof item.x === "number" &&
+        typeof item.y === "number" &&
+        typeof item.width === "number" &&
+        typeof item.height === "number"
+      );
+    };
     return (
       typeof page.index === "number" &&
       (images === undefined ||
         (Array.isArray(images) &&
-          images.every((rawImage) => {
-            if (typeof rawImage !== "object" || rawImage === null) {
-              return false;
-            }
-            const image = rawImage as Record<string, unknown>;
-            return (
-              typeof image.id === "string" &&
-              typeof image.x === "number" &&
-              typeof image.y === "number" &&
-              typeof image.width === "number" &&
-              typeof image.height === "number"
-            );
-          })))
+          images.every(validBox))) &&
+      (drawings === undefined ||
+        (Array.isArray(drawings) &&
+          drawings.every(validBox)))
     );
   });
 }

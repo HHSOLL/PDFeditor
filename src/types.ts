@@ -229,6 +229,7 @@ export interface EngineOperation {
   sourceAnnotationId?: string;
   annotationSubtype?: string;
   sourceImageId?: string;
+  sourceVectorId?: string;
   eraseOriginal?: {
     x: number;
     y: number;

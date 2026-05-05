@@ -533,6 +533,7 @@ button:disabled {
 
 .annotation {
   position: absolute;
+  z-index: 3;
   border: 1px solid transparent;
   user-select: none;
 }
@@ -590,6 +591,18 @@ button:disabled {
   pointer-events: none;
 }
 
+.compare-region {
+  position: absolute;
+  z-index: 4;
+  border: 2px solid #dc2626;
+  border-radius: 3px;
+  background: rgba(239, 68, 68, 0.14);
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.72),
+    0 8px 24px rgba(220, 38, 38, 0.2);
+  pointer-events: none;
+}
+
 .annotation.selected {
   border-color: #176b58;
   box-shadow: 0 0 0 2px rgba(23, 107, 88, 0.18);
@@ -633,6 +646,21 @@ button:disabled {
 .source-image:hover {
   border-color: #b42318;
   background: rgba(180, 35, 24, 0.08);
+}
+
+.source-vector {
+  position: absolute;
+  z-index: 2;
+  padding: 0;
+  border: 1px dashed rgba(124, 58, 237, 0.82);
+  border-radius: 2px;
+  background: rgba(124, 58, 237, 0.08);
+  cursor: crosshair;
+}
+
+.source-vector:hover {
+  border-color: #6d28d9;
+  background: rgba(124, 58, 237, 0.15);
 }
 
 .annotation.text {

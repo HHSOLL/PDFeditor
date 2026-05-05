@@ -20,10 +20,13 @@ being confused with a fully verified Acrobat Pro replacement claim.
 - Report-only preflight with PDF/A/X signal diagnostics.
 - Hidden-info sanitizer coverage for generated fixtures.
 - Inspector compare report download and batch quick action backed by the engine,
-  plus the 100-job batch runner.
+  changed-region compare overlay and first-change navigation, persisted batch
+  presets, plus the 100-job batch runner.
 - Existing image move UI that emits `moveImage` and keeps a real image object in
   the output PDF.
-- External replacement readiness: 80/100 verified as of 2026-05-05.
+- Existing vector object selection and basic object inspector that export
+  through `deleteVector`.
+- External replacement readiness: 82/100 verified as of 2026-05-05.
 - Product-server release smoke verifies the built UI, engine health endpoint,
   OCR runtime, compare endpoint, and batch endpoint through
   `server/pdf-engine-server.mjs`.
@@ -68,7 +71,7 @@ Use:
 
 > Acrobat-class local PDF editor prototype with verified engine-backed OCR
 > correction, certificate signing, forms, sanitizer, preflight reporting,
-> compare/batch UI workflows, and an 80/100 external replacement readiness
+> compare/batch UI workflows, and an 82/100 external replacement readiness
 > score.
 
 Do not use:

@@ -153,6 +153,33 @@ async function createImageCollisionPdf(filePath: string): Promise<void> {
   await fs.writeFile(filePath, await document.save());
 }
 
+async function createVectorObjectPdf(filePath: string): Promise<void> {
+  await fs.mkdir(path.dirname(filePath), { recursive: true });
+  const document = await PDFDocument.create();
+  const page = document.addPage([612, 792]);
+  const font = await document.embedFont(StandardFonts.Helvetica);
+  page.drawText("Vector object page", { x: 72, y: 700, size: 18, font });
+  page.drawRectangle({
+    x: 72,
+    y: 560,
+    width: 170,
+    height: 110,
+    borderWidth: 4,
+    borderColor: rgb(0.7, 0.1, 0.2),
+    color: rgb(0.95, 0.85, 0.85),
+  });
+  page.drawRectangle({
+    x: 300,
+    y: 560,
+    width: 120,
+    height: 90,
+    borderWidth: 3,
+    borderColor: rgb(0.1, 0.35, 0.8),
+    color: rgb(0.85, 0.9, 0.98),
+  });
+  await fs.writeFile(filePath, await document.save());
+}
+
 function runPython(script: string, args: string[] = []): Promise<string> {
   return new Promise((resolve, reject) => {
     const child = spawn(enginePython, ["-c", script, ...args], {
@@ -340,6 +367,27 @@ async function pageImageCounts(filePath: string): Promise<number[]> {
       "import fitz, json, sys",
       "doc = fitz.open(sys.argv[1])",
       "print(json.dumps([len(page.get_images(full=True)) for page in doc]))",
+      "doc.close()",
+    ].join("\n"),
+    [filePath],
+  );
+  return JSON.parse(stdout) as number[];
+}
+
+async function pageNonWhiteDrawingCounts(filePath: string): Promise<number[]> {
+  const stdout = await runPython(
+    [
+      "import fitz, json, sys",
+      "def visible(d):",
+      "    colors = [d.get('fill'), d.get('color')]",
+      "    for color in colors:",
+      "        if not color:",
+      "            continue",
+      "        if any(channel < 0.98 for channel in color[:3]):",
+      "            return True",
+      "    return False",
+      "doc = fitz.open(sys.argv[1])",
+      "print(json.dumps([sum(1 for drawing in page.get_drawings() if visible(drawing)) for page in doc]))",
       "doc.close()",
     ].join("\n"),
     [filePath],
@@ -780,6 +828,32 @@ test("edits and exports the repository ex.pdf without losing page structure", as
   expect(exportedImageCounts[0]).toBeLessThan(sourceImageCounts[0]);
 });
 
+test("selects an existing vector object and exports native vector deletion", async ({ page }) => {
+  const samplePath = path.resolve("tmp/sample-vector-object-ui.pdf");
+  const exportedPath = path.resolve("tmp/exported-vector-object-ui.pdf");
+  await createVectorObjectPdf(samplePath);
+  const beforeCounts = await pageNonWhiteDrawingCounts(samplePath);
+  expect(beforeCounts[0]).toBeGreaterThanOrEqual(2);
+
+  await page.goto("http://127.0.0.1:5173/");
+  await page
+    .locator('input[type="file"][accept="application/pdf"]')
+    .setInputFiles(samplePath);
+  await expectDocumentLoaded(page);
+  await expect(page.locator(".source-vector").first()).toBeVisible({ timeout: 45_000 });
+  await page.locator(".source-vector").first().click();
+  await expect(page.locator(".object-inspector")).toContainText("Vector drawing");
+  await expect(page.locator(".object-inspector")).toContainText("deleteVector");
+
+  const downloadPromise = page.waitForEvent("download");
+  await page.getByRole("button", { name: "PDF 내보내기" }).click();
+  const download = await downloadPromise;
+  await download.saveAs(exportedPath);
+
+  const afterCounts = await pageNonWhiteDrawingCounts(exportedPath);
+  expect(afterCounts[0]).toBeLessThan(beforeCounts[0]);
+});
+
 test("saves metadata and duplicated pages through the advanced save pipeline", async ({
   page,
 }) => {
@@ -929,6 +1003,12 @@ test("compares two PDFs from the inspector and exports a real compare report", a
 
   await expect(page.locator(".preflight-panel")).toContainText("비교 결과");
   await expect(page.locator(".preflight-panel")).toContainText("변경 1쪽");
+  await expect(page.locator(".compare-region").first()).toBeVisible();
+  await expect(page.locator("#compareFirstChangeButton")).toBeEnabled();
+  await page.locator("#compareOverlayVisible").uncheck();
+  await expect(page.locator(".compare-region")).toHaveCount(0);
+  await page.locator("#compareOverlayVisible").check();
+  await expect(page.locator(".compare-region").first()).toBeVisible();
   const reportText = await extractPdfText(reportPath);
   expect(reportText).toContain("PDF Compare Report");
   expect(reportText).toContain("Compare left product text");
@@ -946,8 +1026,18 @@ test("runs batch automation from the inspector and writes structural PDF changes
     .locator('input[type="file"][accept="application/pdf"]')
     .setInputFiles(samplePath);
   await expectDocumentLoaded(page);
+  await page.locator("#batchActionName").fill("Sanitize watermark preset");
   await page.locator("#batchWatermarkText").fill("Batch UI watermark");
   await page.locator("#batchRedactText").fill("BATCH_UI_SECRET");
+  await page.locator("#batchSavePresetButton").click();
+  await page.locator("#batchWatermarkText").fill("Changed before load");
+  await page.locator("#batchRedactText").fill("");
+  await page.locator("#batchSanitizeHiddenInfo").uncheck();
+  await page.locator("#batchLoadPresetButton").click();
+  await expect(page.locator("#batchActionName")).toHaveValue("Sanitize watermark preset");
+  await expect(page.locator("#batchWatermarkText")).toHaveValue("Batch UI watermark");
+  await expect(page.locator("#batchRedactText")).toHaveValue("BATCH_UI_SECRET");
+  await expect(page.locator("#batchSanitizeHiddenInfo")).toBeChecked();
   await expect(page.locator("#batchRunButton")).toBeEnabled();
 
   const downloadPromise = page.waitForEvent("download");

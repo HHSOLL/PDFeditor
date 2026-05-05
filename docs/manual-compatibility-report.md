@@ -29,8 +29,10 @@ are real PDF structure and pass the local validators used before manual opening.
 | `tmp/engine-preflight-report/preflight-report.pdf` | Preflight report PDF | Engine test generated and validates the report PDF | Pass |
 | `tmp/engine-compare/compare-report.pdf` | Compare report PDF | Engine test generated and validates the report PDF | Pass |
 | `tmp/exported-compare-report-ui.pdf` | Inspector compare UI | Playwright saved report PDF and extracted `PDF Compare Report` plus before/after text | Pass |
-| `tmp/exported-batch-ui.pdf` | Inspector batch UI | Playwright extracted batch watermark and confirmed `BATCH_UI_SECRET` was removed from extracted text | Pass |
+| document overlay | Inspector compare UI | Playwright verified changed-region overlay visibility, overlay toggle removal, and first-change command availability | Pass |
+| `tmp/exported-batch-ui.pdf` | Inspector batch UI | Playwright saved/reloaded the batch preset, extracted batch watermark, and confirmed `BATCH_UI_SECRET` was removed from extracted text | Pass |
 | `tmp/exported-image-move-ui.pdf` | Existing image move UI | Playwright verified the output retained one real image object after source-image repositioning | Pass |
+| `tmp/exported-vector-object-ui.pdf` | Existing vector object UI | Playwright selected a detected vector object, displayed the object inspector, exported through `deleteVector`, and confirmed original colored line art count decreased | Pass |
 
 ## Product Server Smoke
 
