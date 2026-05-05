@@ -8,6 +8,7 @@ export type EngineOperationType =
   | "deleteAnnotation"
   | "deleteImage"
   | "deleteVector"
+  | "moveVector"
   | "cropPage"
   | "resizePage"
   | "redactPage"

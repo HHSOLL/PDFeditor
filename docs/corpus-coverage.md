@@ -53,26 +53,52 @@ REQUIRE_QPDF=1 node tests/engine-corpus-100.mjs
 
 ## External Real-World Corpus Manifest
 
-The external corpus is not complete enough for a 90+ external replacement
-claim. The required manifest should be created under
-`tests/corpus/external/README.md` or another non-committed-private corpus
-registry and include these categories:
+`tests/corpus/manifest.json` now defines the required real-world corpus scope as
+a structured manifest. It plans **117 external entries** across the required
+Acrobat, Preview, Chrome, Edge, Office, forms, scanned, CJK, hidden-data,
+standard-signals, malformed, and large-document categories.
 
-| Category | Minimum Count | Status |
+This is a gate, not a claim. Most entries remain `pending-acquisition` until the
+actual PDF or reproducible generation step is attached and representative manual
+compatibility smoke is recorded. Private or copyrighted PDFs must not be
+committed.
+
+Validation command:
+
+```bash
+npm run test:corpus
+```
+
+That command validates the generated 100-PDF corpus with qpdf/PyMuPDF, validates
+the external corpus manifest schema through `tests/corpus-smoke.mjs`, generates
+117 reproducible surrogate PDFs under
+`tmp/corpus-manifest-smoke/surrogate-pdfs/`, and validates those surrogate PDFs
+with qpdf/PyMuPDF.
+
+The surrogate files prove the corpus gate is executable and broad enough to
+exercise validators. They do **not** replace the required real-world/manual
+compatibility corpus because they are synthetic.
+
+Current planned manifest coverage:
+
+| Category | Planned Count | Status |
 | --- | ---: | --- |
-| Acrobat-created / Acrobat-edited PDFs | 10 | Pending |
-| macOS Preview annotated PDFs | 8 | Pending |
-| Chrome/Edge print-to-PDF outputs | 8 | Pending |
-| Office Word/PowerPoint/Excel exports | 12 | Pending |
-| Government, contract, invoice, bank/tax forms | 15 | Pending |
-| Scanned Korean and English PDFs | 10 | Pending |
-| CJK, emoji, RTL text PDFs | 8 | Pending |
-| Signed/encrypted PDFs | 8 | Pending |
-| AcroForm/XFA PDFs | 8 | Pending |
-| Annotation/image/vector/table-heavy PDFs | 10 | Pending |
-| PDF/A/PDF/X/tagged/accessibility PDFs | 8 | Pending |
-| Hidden-data, OCG, JS/action, embedded-file PDFs | 8 | Pending |
-| Malformed-but-openable and large 100/300/500/1000-page PDFs | 7 | Pending |
+| Acrobat-created PDFs | 10 | Pending acquisition/manual smoke |
+| Acrobat-edited PDFs | 6 | Pending acquisition/manual smoke |
+| Acrobat signed PDFs | 6 | Pending acquisition/manual smoke |
+| AcroForm/XFA PDFs | 8 | Pending acquisition/manual smoke |
+| macOS Preview annotated PDFs | 8 | Pending acquisition/manual smoke |
+| Chrome print-to-PDF outputs | 4 | Pending acquisition/manual smoke |
+| Edge print-to-PDF outputs | 4 | Pending acquisition/manual smoke |
+| Office Word exports | 5 | Pending acquisition/manual smoke |
+| Office Excel exports | 4 | Pending acquisition/manual smoke |
+| Office PowerPoint exports | 4 | Pending acquisition/manual smoke |
+| Government, contract, invoice, bank/tax forms | 15 | Pending acquisition/manual smoke |
+| Scanned Korean and English PDFs | 10 | Pending acquisition/manual smoke |
+| CJK, emoji, RTL text PDFs | 8 | Pending acquisition/manual smoke |
+| PDF/A/PDF/X/tagged/accessibility PDFs | 8 | Pending acquisition/manual smoke |
+| Hidden-data, OCG, JS/action, embedded-file PDFs | 10 | Pending acquisition/manual smoke |
+| Malformed-but-openable and large 100/300/500/1000-page PDFs | 7 | Pending acquisition/manual smoke; generated 100/300/500/1000-page engine fixtures are covered by `tests/engine-large-document.mjs` |
 
 ## Acceptance for External Corpus Completion
 
@@ -82,3 +108,7 @@ registry and include these categories:
 - Representative files cover open/render/export/reopen.
 - Manual compatibility results reference corpus IDs rather than ad hoc paths.
 - Private or copyrighted PDFs are not committed to the repository.
+
+Until actual real-world files or faithful reproducible generation steps are
+attached and linked to manual compatibility results, this manifest and its
+surrogate PDFs do not add external readiness points by themselves.

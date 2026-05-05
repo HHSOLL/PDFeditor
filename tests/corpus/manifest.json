@@ -1,0 +1,207 @@
+{
+  "version": 1,
+  "name": "PDFeditor external compatibility corpus manifest",
+  "targetExternalEntries": 100,
+  "status": "pending-acquisition",
+  "claimPolicy": {
+    "manualSmokeRequiredForFullCredit": true,
+    "privateOrCopyrightedPdfsCommitted": false,
+    "external90PlusBlockedUntilRepresentativeManualSmokePasses": true
+  },
+  "entryTemplate": {
+    "requiredFields": [
+      "id",
+      "category",
+      "sourceOrGeneration",
+      "licensePrivacy",
+      "storagePolicy",
+      "assertions",
+      "expectedBehavior",
+      "manualSmokeRequired"
+    ],
+    "manualViewers": [
+      "Acrobat Pro or Reader",
+      "macOS Preview",
+      "Google Chrome PDF viewer",
+      "Microsoft Edge PDF viewer"
+    ]
+  },
+  "categories": [
+    {
+      "slug": "acrobat-created",
+      "idPrefix": "EXT-ACR",
+      "requiredCount": 10,
+      "sourceOrGeneration": "Create or export representative PDFs from Acrobat Pro, including plain text, edited text, page organization, comments, and simple forms.",
+      "licensePrivacy": "Local test documents only; do not commit proprietary or customer PDFs.",
+      "storagePolicy": "Store private PDFs outside the repository and record only an anonymized path or acquisition note.",
+      "assertions": ["open", "render", "export-reopen", "manual-compatibility"],
+      "expectedBehavior": "Files open without repair prompts and survive export/reopen with page geometry and visible content intact.",
+      "manualSmokeRequired": true
+    },
+    {
+      "slug": "acrobat-edited",
+      "idPrefix": "EXT-AED",
+      "requiredCount": 6,
+      "sourceOrGeneration": "Use Acrobat Pro to edit existing text, images, and annotations, then save incrementally and as optimized copies.",
+      "licensePrivacy": "Synthetic or licensed fixtures only.",
+      "storagePolicy": "Prefer generated source documents committed as scripts; keep Acrobat outputs private when licensing is unclear.",
+      "assertions": ["incremental-save", "text-edit", "image-edit", "annotation-retention"],
+      "expectedBehavior": "PDFeditor can open, render, edit, export, and validate Acrobat-edited PDFs without losing object structure.",
+      "manualSmokeRequired": true
+    },
+    {
+      "slug": "acrobat-signed",
+      "idPrefix": "EXT-SIG",
+      "requiredCount": 6,
+      "sourceOrGeneration": "Create signed PDFs with Acrobat self-signed and locally trusted certificates, including tampered variants.",
+      "licensePrivacy": "Use disposable test certificates only.",
+      "storagePolicy": "Do not commit private keys. Commit only public sample certificates when license permits.",
+      "assertions": ["signature-field", "byte-range", "tamper-detection", "manual-signature-panel"],
+      "expectedBehavior": "Signatures are detected, validation status is explicit, and tampering invalidates byte integrity.",
+      "manualSmokeRequired": true
+    },
+    {
+      "slug": "acroform-xfa",
+      "idPrefix": "EXT-FRM",
+      "requiredCount": 8,
+      "sourceOrGeneration": "Collect or generate AcroForm text, checkbox, radio, combo, list, signature-field, and XFA detection fixtures.",
+      "licensePrivacy": "Use public/government forms only when redistribution is allowed; otherwise use manifest-only entries.",
+      "storagePolicy": "Do not commit forms containing personal data.",
+      "assertions": ["form-fill", "appearance-stream", "flatten", "xfa-warning"],
+      "expectedBehavior": "AcroForm values and appearances survive export; XFA is detected and clearly marked unsupported.",
+      "manualSmokeRequired": true
+    },
+    {
+      "slug": "preview-annotated",
+      "idPrefix": "EXT-PRV",
+      "requiredCount": 8,
+      "sourceOrGeneration": "Annotate synthetic PDFs in macOS Preview with highlights, notes, shapes, and ink.",
+      "licensePrivacy": "Synthetic inputs only.",
+      "storagePolicy": "Commit generation instructions; commit outputs only if fully synthetic.",
+      "assertions": ["annotation-import", "annotation-edit", "annotation-flatten", "manual-preview-roundtrip"],
+      "expectedBehavior": "Preview-created annotations import, edit, delete, and flatten without hidden overlay-only output.",
+      "manualSmokeRequired": true
+    },
+    {
+      "slug": "chrome-generated",
+      "idPrefix": "EXT-CHR",
+      "requiredCount": 4,
+      "sourceOrGeneration": "Use Chrome print-to-PDF for web pages with text, tables, links, and images.",
+      "licensePrivacy": "Use locally generated HTML fixtures or permissively licensed pages.",
+      "storagePolicy": "Commit local HTML generators rather than copyrighted print outputs when possible.",
+      "assertions": ["open", "links", "text-selection", "export-reopen"],
+      "expectedBehavior": "Chrome-generated PDFs preserve searchable text, links, and page geometry after export.",
+      "manualSmokeRequired": true
+    },
+    {
+      "slug": "edge-generated",
+      "idPrefix": "EXT-EDG",
+      "requiredCount": 4,
+      "sourceOrGeneration": "Use Edge print-to-PDF for the same local HTML fixture set used by Chrome.",
+      "licensePrivacy": "Synthetic local HTML fixtures only.",
+      "storagePolicy": "Commit generation steps; keep browser output reproducible.",
+      "assertions": ["open", "links", "text-selection", "export-reopen"],
+      "expectedBehavior": "Edge-generated PDFs preserve searchable text, links, and page geometry after export.",
+      "manualSmokeRequired": true
+    },
+    {
+      "slug": "office-word",
+      "idPrefix": "EXT-WRD",
+      "requiredCount": 5,
+      "sourceOrGeneration": "Export Word documents covering headings, footers, tables, comments, and CJK text.",
+      "licensePrivacy": "Use original synthetic documents.",
+      "storagePolicy": "Commit DOCX generator or document when possible; otherwise record reproducible export steps.",
+      "assertions": ["paragraph-reflow", "headers-footers", "tables", "cjk"],
+      "expectedBehavior": "Text editing and reflow avoid tables and preserve searchable text after export.",
+      "manualSmokeRequired": true
+    },
+    {
+      "slug": "office-excel",
+      "idPrefix": "EXT-XLS",
+      "requiredCount": 4,
+      "sourceOrGeneration": "Export Excel sheets with grid-heavy tables, page breaks, and mixed page sizes.",
+      "licensePrivacy": "Synthetic spreadsheets only.",
+      "storagePolicy": "Commit generator or source spreadsheet when license permits.",
+      "assertions": ["table-heavy-render", "page-breaks", "page-boxes"],
+      "expectedBehavior": "Rendering, crop/page boxes, and export validation remain stable.",
+      "manualSmokeRequired": true
+    },
+    {
+      "slug": "office-powerpoint",
+      "idPrefix": "EXT-PPT",
+      "requiredCount": 4,
+      "sourceOrGeneration": "Export slide decks with images, vector shapes, transparency, and embedded fonts.",
+      "licensePrivacy": "Synthetic slide decks only.",
+      "storagePolicy": "Commit generator or source deck when possible.",
+      "assertions": ["vector-detection", "image-edit", "transparency-signal"],
+      "expectedBehavior": "Image/vector object detection and preflight signals do not corrupt slide-like PDFs.",
+      "manualSmokeRequired": true
+    },
+    {
+      "slug": "government-contract-bank-tax",
+      "idPrefix": "EXT-GOV",
+      "requiredCount": 15,
+      "sourceOrGeneration": "Use public forms or synthetic lookalikes covering contracts, invoices, tax, and bank-style layouts.",
+      "licensePrivacy": "Public-domain or synthetic only; no personal data.",
+      "storagePolicy": "Record URL and license for public forms; otherwise use synthetic generator.",
+      "assertions": ["forms", "signatures", "annotations", "accessibility", "manual-business-doc-smoke"],
+      "expectedBehavior": "Forms, signatures, annotations, and export/reopen workflows are usable on business documents.",
+      "manualSmokeRequired": true
+    },
+    {
+      "slug": "scanned-korean-english",
+      "idPrefix": "EXT-OCR",
+      "requiredCount": 10,
+      "sourceOrGeneration": "Generate scanned image-over-text and image-only PDFs in Korean and English with varied DPI.",
+      "licensePrivacy": "Synthetic scans only.",
+      "storagePolicy": "Commit source images when generated; otherwise record generator inputs.",
+      "assertions": ["ocr-runtime", "ocr-correction", "searchable-export", "manual-search-smoke"],
+      "expectedBehavior": "OCR creates searchable text, correction persists, and image-over-text output remains visually intact.",
+      "manualSmokeRequired": true
+    },
+    {
+      "slug": "cjk-emoji-rtl",
+      "idPrefix": "EXT-TXT",
+      "requiredCount": 8,
+      "sourceOrGeneration": "Generate text PDFs with Korean, Japanese, Chinese, emoji, Arabic/Hebrew RTL, and mixed Latin content.",
+      "licensePrivacy": "Synthetic text only.",
+      "storagePolicy": "Commit generator and generated fixture if font licensing permits.",
+      "assertions": ["font-embedding", "text-extraction", "reflow-classification", "manual-glyph-smoke"],
+      "expectedBehavior": "Text remains searchable and visual fallback behavior is explicit for unsupported shaping cases.",
+      "manualSmokeRequired": true
+    },
+    {
+      "slug": "tagged-pdfa-pdfx-accessibility",
+      "idPrefix": "EXT-STD",
+      "requiredCount": 8,
+      "sourceOrGeneration": "Collect tagged PDFs, PDF/A claim files, PDF/X claim files, and accessibility samples.",
+      "licensePrivacy": "Use public validator samples or locally generated fixtures.",
+      "storagePolicy": "Record source URL/license; do not claim certification without validator evidence.",
+      "assertions": ["preflight-report", "pdfa-signal", "pdfx-signal", "accessibility-report"],
+      "expectedBehavior": "Reports identify standard signals and limitations without overclaiming certification.",
+      "manualSmokeRequired": true
+    },
+    {
+      "slug": "hidden-data-security",
+      "idPrefix": "EXT-HDN",
+      "requiredCount": 10,
+      "sourceOrGeneration": "Generate or collect PDFs with embedded files, JS/actions, OCG, stale incremental saves, comments, RichMedia, and hidden search/index signals.",
+      "licensePrivacy": "Synthetic secrets only; never use real sensitive data.",
+      "storagePolicy": "Commit only fixtures with placeholder secrets and no executable external payloads.",
+      "assertions": ["sanitizer", "raw-byte-scan", "xref-scan", "manual-acrobat-sanitize-comparison"],
+      "expectedBehavior": "Sanitizer removes claimable hidden data and reports any unsupported hidden content clearly.",
+      "manualSmokeRequired": true
+    },
+    {
+      "slug": "malformed-large",
+      "idPrefix": "EXT-LRG",
+      "requiredCount": 7,
+      "sourceOrGeneration": "Generate large 100/300/500/1000-page PDFs and add malformed-but-openable variants.",
+      "licensePrivacy": "Synthetic only.",
+      "storagePolicy": "Generate under tmp/ for size; commit generators only.",
+      "assertions": ["large-document-performance", "qpdf-check", "lazy-render", "error-recovery"],
+      "expectedBehavior": "Viewer remains responsive, validators report clear errors, and recoverable files open/export.",
+      "manualSmokeRequired": true
+    }
+  ]
+}

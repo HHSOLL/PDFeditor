@@ -8,7 +8,8 @@ import {
 } from "./helpers/pdf-engine-test-utils.mjs";
 
 const workDir = path.join(root, "tmp", "engine-large-document");
-const pageCounts = [100, 300, 500];
+const pageCounts = [100, 300, 500, 1000];
+const metrics = [];
 
 await fs.rm(workDir, { force: true, recursive: true });
 await fs.mkdir(workDir, { recursive: true });
@@ -29,7 +30,19 @@ for (const pageCount of pageCounts) {
   if (pageCount === 100 && elapsed > 10_000) {
     throw new Error(`100 page fixture validation is too slow for local gate: ${elapsed}ms`);
   }
+  if (pageCount === 1000 && elapsed > 60_000) {
+    throw new Error(`1000 page fixture validation is too slow for local gate: ${elapsed}ms`);
+  }
+  metrics.push({
+    pageCount,
+    elapsedMs: elapsed,
+    pageCountValidated: validation.pageCount,
+    qpdfChecked: validation.qpdfChecked,
+    file: filePath,
+  });
 }
+
+await fs.writeFile(path.join(workDir, "metrics.json"), JSON.stringify({ ok: true, metrics }, null, 2));
 
 async function createLargeFixture(filePath, pageCount) {
   await runProcess("python3", [

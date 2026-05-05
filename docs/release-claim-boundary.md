@@ -46,17 +46,25 @@ being confused with a fully verified Acrobat Pro replacement claim.
 - Production-ready SaaS or native packaged desktop release.
 - Compatibility with Acrobat/Preview/Chrome/Edge unless the manual smoke report
   contains completed app-specific pass records.
+- Treating the external corpus manifest as completed real-world corpus evidence
+  before files or reproducible generation steps are attached.
 
 ## Current High-Risk Boundaries
 
 - **Manual viewer compatibility:** required app versions are detected locally,
   but representative output PDFs still need explicit visual smoke in Acrobat,
   Preview, Chrome, and Edge.
+- **External corpus:** `tests/corpus/manifest.json` defines 117 planned external
+  entries and `npm run test:corpus` now generates/validates 117 synthetic
+  surrogate PDFs for drift prevention, but most real-world entries are still
+  pending acquisition and manual smoke.
 - **Deployment:** the app has a smoke-tested local web release package. There is
   no native desktop app, hosted production deployment, queue, auth, audit log, or
   managed engine lifecycle.
 - **Preflight:** the current engine reports signals. It does not certify PDF/A/X
-  conformance and does not apply fixups.
+  conformance and does not apply fixups. The validator evaluation is tracked in
+  `docs/pdfa-pdfx-engine-evaluation.md`; claims stay blocked until veraPDF or a
+  professional SDK path is integrated and tested.
 - **Digital signatures:** CMS ByteRange signing and tamper detection work.
   Timestamp, LTV, revocation, and enterprise trust-chain UX are not included.
 - **OCR:** OCR can produce searchable PDFs and write corrected text. Full

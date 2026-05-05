@@ -2831,6 +2831,15 @@ function rectChangedFromSourceImage(annotation: Annotation, sourceImage: SourceI
   );
 }
 
+function rectChangedFromSourceVector(annotation: Annotation, sourceVector: SourceVectorItem): boolean {
+  return (
+    Math.abs(annotation.x - sourceVector.x) > 0.002 ||
+    Math.abs(annotation.y - sourceVector.y) > 0.002 ||
+    Math.abs(annotation.width - sourceVector.width) > 0.002 ||
+    Math.abs(annotation.height - sourceVector.height) > 0.002
+  );
+}
+
 function pageHasSourceTextEdit(pageId: string): boolean {
   return annotations.some(
     (annotation) => annotation.pageId === pageId && annotation.type === "text" && Boolean(annotation.sourceTextId),
@@ -3469,7 +3478,9 @@ function renderSourceObjectInspector(annotation: Annotation): string {
     ? rectChangedFromSourceImage(annotation, sourceImage)
       ? "moveImage로 원본 이미지 제거 후 새 위치에 재삽입"
       : "deleteImage로 원본 이미지 객체 제거"
-    : "deleteVector로 닿은 벡터 라인아트 제거";
+    : sourceVector && rectChangedFromSourceVector(annotation, sourceVector)
+      ? "moveVector로 원본 벡터 제거 후 새 위치에 벡터 박스 재삽입"
+      : "deleteVector로 닿은 벡터 라인아트 제거";
   return `
     <div class="preflight-panel object-inspector">
       <strong>PDF 객체 속성</strong>
@@ -4855,10 +4866,24 @@ function annotationToEngineOperation(annotation: Annotation, pageIndex: number):
   }
 
   if (annotation.sourceVectorId && annotation.type === "redact") {
+    const sourceVector = sourceVectorItemById(annotation.sourceVectorId);
+    if (sourceVector && rectChangedFromSourceVector(annotation, sourceVector)) {
+      return {
+        ...base,
+        type: "moveVector",
+        sourceVectorId: sourceVector.sourceVectorId,
+        eraseOriginal: {
+          x: sourceVector.x,
+          y: sourceVector.y,
+          width: sourceVector.width,
+          height: sourceVector.height,
+        },
+      };
+    }
     return {
       ...base,
       type: "deleteVector",
-      sourceVectorId: sourceVectorItemById(annotation.sourceVectorId)?.sourceVectorId ?? annotation.sourceVectorId,
+      sourceVectorId: sourceVector?.sourceVectorId ?? annotation.sourceVectorId,
     };
   }
 

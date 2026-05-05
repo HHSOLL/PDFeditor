@@ -67,8 +67,27 @@ npm run test:package-smoke
 ```
 
 The local package contains built UI assets, the Node engine server, the Python
-engine, fonts, a launcher, and a README. The launcher creates a local Python
-virtual environment and installs `engine/requirements.txt` on first run.
+engine, fonts, a launcher, runtime log directory, support-bundle script, release
+manifest, and a README. The launcher creates a local Python virtual environment
+and installs `engine/requirements.txt` on first run.
+
+Package support files:
+
+```txt
+release/pdfeditor-local/release-manifest.json
+release/pdfeditor-local/logs/pdfeditor-local.log
+release/pdfeditor-local/support-bundle.sh
+```
+
+Create a support bundle:
+
+```bash
+release/pdfeditor-local/support-bundle.sh
+```
+
+`npm run test:package-smoke` verifies the manifest, launcher, support-bundle
+script, built UI, health endpoint, and preflight endpoint. This is still a local
+web package, not a native app or managed hosted deployment.
 
 ## Non-Claimable Deployment Gaps
 
@@ -77,7 +96,7 @@ virtual environment and installs `engine/requirements.txt` on first run.
 - No job queue for long OCR/sanitize/preflight tasks.
 - No authentication, billing, tenant isolation, audit logs, or retention
   controls.
-- No crash-reporting or support bundle.
+- No crash-reporting or automatic telemetry.
 
 Until one of those product packaging paths is complete, deployment contributes
 only limited external replacement readiness credit.

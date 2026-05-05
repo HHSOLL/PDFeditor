@@ -15,6 +15,9 @@ for (const requiredPath of [
   path.join(releaseRoot, "server", "pdf-engine-server.mjs"),
   path.join(releaseRoot, "engine", "pdf_engine.py"),
   path.join(releaseRoot, "run.sh"),
+  path.join(releaseRoot, "support-bundle.sh"),
+  path.join(releaseRoot, "release-manifest.json"),
+  path.join(releaseRoot, "logs", ".gitkeep"),
 ]) {
   if (!existsSync(requiredPath)) {
     throw new Error(`local package is missing ${requiredPath}; run npm run package:local`);
@@ -59,6 +62,13 @@ try {
   if (!preflight.validation?.ok || preflight.pageCount !== 1 || !Array.isArray(preflight.warnings)) {
     throw new Error(`package preflight endpoint did not return a valid report: ${JSON.stringify(preflight)}`);
   }
+  const manifest = await readPackageManifest();
+  if (manifest.claimBoundary?.nativeDesktop !== false || manifest.claimBoundary?.productionSaaS !== false) {
+    throw new Error(`local package manifest must keep native/SaaS claims blocked: ${JSON.stringify(manifest)}`);
+  }
+  if (manifest.runtime?.logs !== "logs/pdfeditor-local.log" || manifest.runtime?.supportBundle !== "support-bundle.sh") {
+    throw new Error(`local package manifest is missing log/support paths: ${JSON.stringify(manifest)}`);
+  }
 } finally {
   server.kill("SIGTERM");
   await delay(250);
@@ -90,6 +100,11 @@ async function fetchJson(url, init) {
     throw new Error(`HTTP ${response.status} from ${url}: ${body}`);
   }
   return JSON.parse(body);
+}
+
+async function readPackageManifest() {
+  const { readFile } = await import("node:fs/promises");
+  return JSON.parse(await readFile(path.join(releaseRoot, "release-manifest.json"), "utf8"));
 }
 
 async function createPdfBase64(text) {

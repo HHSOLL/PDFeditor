@@ -11,6 +11,7 @@ import {
 const workDir = path.join(root, "tmp", "engine-vector-object-edit");
 const inputPath = path.join(workDir, "vector-source.pdf");
 const outputPath = path.join(workDir, "vector-output.pdf");
+const movedPath = path.join(workDir, "vector-moved-output.pdf");
 
 await fs.rm(workDir, { force: true, recursive: true });
 await fs.mkdir(workDir, { recursive: true });
@@ -22,6 +23,7 @@ if (before.pages[0].drawings < 2) {
 }
 
 await applyEngine(inputPath, outputPath, createPayload(), "vector-object-edit");
+await applyEngine(inputPath, movedPath, createMovePayload(), "vector-object-move");
 
 const validation = await validatePdf(outputPath);
 if (!validation.ok || !validation.qpdfChecked) {
@@ -34,6 +36,18 @@ if (after.pages[0].drawings >= before.pages[0].drawings) {
 }
 if (!after.pages[0].text.includes("Vector deletion keeps text searchable")) {
   throw new Error(`vector delete removed unrelated text: ${after.pages[0].text}`);
+}
+
+const movedValidation = await validatePdf(movedPath);
+if (!movedValidation.ok || !movedValidation.qpdfChecked) {
+  throw new Error(`vector move output failed validation: ${JSON.stringify(movedValidation)}`);
+}
+const moved = await inspectPdf(movedPath);
+if (!moved.pages[0].text.includes("Vector deletion keeps text searchable")) {
+  throw new Error(`vector move removed unrelated text: ${moved.pages[0].text}`);
+}
+if (moved.pages[0].drawings < 1) {
+  throw new Error(`vector move should reinsert a real drawing object: ${JSON.stringify(moved.pages[0])}`);
 }
 
 async function createVectorFixture(filePath) {
@@ -68,6 +82,35 @@ function createPayload() {
         y: 126 / 792,
         width: 176 / 612,
         height: 138 / 792,
+      },
+    ],
+  };
+}
+
+function createMovePayload() {
+  return {
+    saveOptions: {
+      annotationMode: "flatten",
+      redactionMode: "textOnly",
+      validate: true,
+    },
+    operations: [
+      {
+        type: "moveVector",
+        pageIndex: 0,
+        x: 300 / 612,
+        y: 140 / 792,
+        width: 150 / 612,
+        height: 100 / 792,
+        color: "#176b58",
+        opacity: 1,
+        strokeWidth: 3,
+        eraseOriginal: {
+          x: 68 / 612,
+          y: 126 / 792,
+          width: 176 / 612,
+          height: 138 / 792,
+        },
       },
     ],
   };

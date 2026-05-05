@@ -79,6 +79,20 @@ records the actual visual result.
 | Google Chrome PDF viewer | Pending | Pending | Pending | Pending | Pending | Pending | Pending | Not claimable |
 | Microsoft Edge PDF viewer | Pending | Pending | Pending | Pending | Pending | Pending | Pending | Not claimable |
 
+## Corpus Linkage
+
+Future manual rows must reference either a generated output path from `tmp/` or
+an external corpus ID from `tests/corpus/manifest.json`. The manifest currently
+plans 117 external entries, but those entries are not full compatibility evidence
+until actual files or reproducible generation steps exist and this report records
+viewer-specific pass/fail results.
+
+`npm run test:manual-smoke-package` creates a stable 50-PDF manual smoke package
+under `tmp/manual-compatibility-package/` with a generated checklist. The package
+is for repeatable manual opening in Acrobat/Preview/Chrome/Edge; it does not
+count as compatibility pass evidence until this report is updated with actual
+viewer-specific results.
+
 ## Manual Smoke Procedure
 
 For each viewer:

@@ -979,6 +979,7 @@ def validate_operations(value: Any, page_count: int) -> list[Operation]:
             "deleteAnnotation",
             "deleteImage",
             "deleteVector",
+            "moveVector",
             "moveImage",
             "formField",
             "cropPage",
@@ -1499,6 +1500,12 @@ def apply_redaction_phase(
             page.add_redact_annot(to_rect(operation, metrics), fill=(1, 1, 1))
             has_redactions = True
             force_graphics_removal = True
+        elif operation["type"] == "moveVector":
+            source = operation.get("eraseOriginal")
+            source_rect = to_rect(source, metrics) if isinstance(source, dict) else to_rect(operation, metrics)
+            page.add_redact_annot(source_rect, fill=(1, 1, 1))
+            has_redactions = True
+            force_graphics_removal = True
         elif operation["type"] == "moveImage":
             source = operation.get("eraseOriginal")
             source_rect = to_rect(source, metrics) if isinstance(source, dict) else to_rect(operation, metrics)
@@ -1630,6 +1637,8 @@ def apply_insert_phase(
             image_bytes = moved_source_images.get(moved_source_image_key(operation))
             if image_bytes:
                 page.insert_image(to_rect(operation, metrics), stream=image_bytes, keep_proportion=True)
+        elif op_type == "moveVector":
+            draw_outline_rect(page, operation, metrics)
         elif op_type == "typedSignature":
             signed_operation: Operation = dict(operation)  # type: ignore[assignment]
             signed_operation["text"] = str(operation.get("signerName") or operation.get("text") or "")

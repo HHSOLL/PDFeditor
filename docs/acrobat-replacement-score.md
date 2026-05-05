@@ -41,7 +41,7 @@ managed production package, and non-report-only professional validation engines.
 | Viewer / workspace / performance | 8 | 6 | Continuous center viewport, fixed side panels, page-scoped rendering, lazy large-document engine fixture | 1000-page UX/memory report and cross-browser visual smoke |
 | Core compatibility / export validation | 10 | 8 | `qpdf`, PyMuPDF validation, PDF.js E2E reopen/export, 100 generated PDF corpus | Third-party real-world 100+ corpus and external app smoke |
 | Text editing / semantic reflow | 12 | 6 | Redaction + replacement, paragraph reflow tests, figure/caption/cross-page coverage | Multi-column/table/RTL/emoji manual corpus and Acrobat visual smoke |
-| Image / vector / object editing | 8 | 7 | Engine-backed image delete/replace/move tests plus UI move path that uses `moveImage`; existing vector objects are detected, surfaced, inspected, and exported through `deleteVector` instead of overlay-only movement | Image crop/rotate/resize UI polish, vector move/color/stroke editing, richer object inspector smoke |
+| Image / vector / object editing | 8 | 7 | Engine-backed image delete/replace/move tests plus UI move path that uses `moveImage`; existing vector objects are detected, surfaced, inspected, and exported through `deleteVector` or `moveVector` instead of overlay-only movement | Image crop/rotate/resize UI polish, exact vector path preservation, vector color/stroke editing UI, richer object inspector smoke |
 | Page organization | 7 | 6 | Page delete/reorder/rotate/duplicate/extract/insert/crop/resize/bookmark remap tests | More link/named-destination/form remap corpus and manual smoke |
 | Comments / annotations | 6 | 4 | Imported annotations, native/flatten save, file attachment comment tests | Cross-viewer annotation corpus and reply/stamp/XFDF comment workflows |
 | Forms | 8 | 6 | AcroForm fill/save/create, required/default/export values, tab order, XFDF, XFA warning | Manual Acrobat/Preview/Chrome appearance report and richer field UI |
@@ -91,9 +91,9 @@ The shortest path from the current verified 82 to a claimable 90 is:
 1. Run and record Acrobat Pro/Reader, Preview, Chrome, and Edge manual smoke for
    representative OCR, signed, form, sanitizer, preflight, annotation, text-edit,
    image-edit, compare, and batch output PDFs.
-2. Add a real-world external corpus manifest with at least 100 PDFs or
-   reproducible acquisition/generation steps when copyright prevents committing
-   the files.
+2. Attach actual files or reproducible acquisition/generation steps to the
+   117-entry external corpus manifest in `tests/corpus/manifest.json`, then
+   connect representative entries to manual smoke results.
 3. Replace report-only PDF/A/X checks with veraPDF or a professional SDK path,
    while keeping fixups unclaimed until verified.
 4. Ship either a native desktop build or a managed production web deployment with
