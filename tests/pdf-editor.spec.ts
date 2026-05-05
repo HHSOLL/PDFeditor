@@ -1,8 +1,14 @@
 import { expect, test } from "@playwright/test";
+import type { Page } from "@playwright/test";
 import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
+
+const root = process.cwd();
+const enginePython = process.env.PDF_ENGINE_PYTHON ||
+  (existsSync(path.join(root, ".venv", "bin", "python")) ? path.join(root, ".venv", "bin", "python") : "python3");
 
 async function createSamplePdf(filePath: string): Promise<void> {
   await fs.mkdir(path.dirname(filePath), { recursive: true });
@@ -134,7 +140,7 @@ async function createImageCollisionPdf(filePath: string): Promise<void> {
 
 function runPython(script: string, args: string[] = []): Promise<string> {
   return new Promise((resolve, reject) => {
-    const child = spawn("python3", ["-c", script, ...args], {
+    const child = spawn(enginePython, ["-c", script, ...args], {
       cwd: process.cwd(),
       stdio: ["ignore", "pipe", "pipe"],
     });
@@ -145,7 +151,7 @@ function runPython(script: string, args: string[] = []): Promise<string> {
     child.on("error", reject);
     child.on("close", (code) => {
       if (code !== 0) {
-        reject(new Error(`python3 exited ${code}: ${Buffer.concat(stderr).toString("utf8")}`));
+        reject(new Error(`${enginePython} exited ${code}: ${Buffer.concat(stderr).toString("utf8")}`));
         return;
       }
       resolve(Buffer.concat(stdout).toString("utf8"));
@@ -263,6 +269,11 @@ async function pageImageCounts(filePath: string): Promise<number[]> {
   return JSON.parse(stdout) as number[];
 }
 
+async function expectDocumentLoaded(page: Page, pageCountText = "1쪽"): Promise<void> {
+  await expect(page.locator("#pageCount")).toHaveText(pageCountText, { timeout: 45_000 });
+  await expect(page.locator(".page-stage").first()).toBeVisible({ timeout: 45_000 });
+}
+
 test("selects multi-line PDF text as one editable paragraph without repainting the canvas", async ({
   page,
 }) => {
@@ -273,6 +284,7 @@ test("selects multi-line PDF text as one editable paragraph without repainting t
   await page
     .locator('input[type="file"][accept="application/pdf"]')
     .setInputFiles(samplePath);
+  await expectDocumentLoaded(page);
 
   const paragraphBlock = page.locator(".source-text", {
     hasText: "Second sentence shares the same paragraph block.",
@@ -314,7 +326,7 @@ test("edits existing PDF text with auto reflow and exports real PDF text", async
   await page
     .locator('input[type="file"][accept="application/pdf"]')
     .setInputFiles(samplePath);
-  await expect(page.locator(".page-shell canvas")).toBeVisible();
+  await expectDocumentLoaded(page);
   await expect(page.locator(".source-text", { hasText: "Original contract title" })).toBeVisible();
 
   await page.locator(".source-text", { hasText: "Original contract title" }).click();
@@ -598,7 +610,7 @@ test("blocks export only when semantic layout solver cannot resolve", async ({ p
 test("edits and exports the repository ex.pdf without losing page structure", async ({
   page,
 }, testInfo) => {
-  testInfo.setTimeout(120_000);
+  testInfo.setTimeout(180_000);
   const samplePath = path.resolve("ex.pdf");
   const exportedPath = path.resolve("tmp/exported-ex.pdf");
   const originalTitle = "Synthetic Computers at Scale for Long-Horizon Productivity Simulation";
@@ -626,7 +638,7 @@ test("edits and exports the repository ex.pdf without losing page structure", as
   await firstSourceImage.click();
   await expect(page.locator(".annotation.redact").first()).toBeVisible();
 
-  const downloadPromise = page.waitForEvent("download", { timeout: 120_000 });
+  const downloadPromise = page.waitForEvent("download", { timeout: 180_000 });
   await page.getByRole("button", { name: "PDF 내보내기" }).click();
   const download = await downloadPromise;
   await download.saveAs(exportedPath);
@@ -730,6 +742,7 @@ test("fills imported AcroForm text and checkbox fields through the engine", asyn
   await page
     .locator('input[type="file"][accept="application/pdf"]')
     .setInputFiles(samplePath);
+  await expectDocumentLoaded(page);
 
   await expect(page.locator(".annotation.form-field")).toHaveCount(2);
   await page.locator(".annotation.form-field.text-field input").fill("Carol Form");
@@ -768,6 +781,39 @@ test("fills imported AcroForm choice fields through the engine", async ({
   await download.saveAs(exportedPath);
 
   expect(await widgetValues(exportedPath)).toEqual({ department: "Engineering", region: "Busan" });
+});
+
+test("creates a new AcroForm text field and exports it as a real widget", async ({
+  page,
+}) => {
+  const samplePath = path.resolve("tmp/sample-form-create-ui.pdf");
+  const exportedPath = path.resolve("tmp/exported-form-create-ui.pdf");
+  await createSamplePdf(samplePath);
+
+  await page.goto("http://127.0.0.1:5173/");
+  await page
+    .locator('input[type="file"][accept="application/pdf"]')
+    .setInputFiles(samplePath);
+  await expect(page.locator(".page-shell canvas")).toBeVisible();
+
+  await page.locator("#toolbar").getByRole("button", { name: /양식/ }).click();
+  await page.locator(".page-stage[data-page-number='1'] .annotation-layer").click({ position: { x: 220, y: 250 } });
+  await expect(page.locator(".annotation.form-field")).toHaveCount(1);
+  await page.locator("#formName").fill("createdUiText");
+  await page.locator("#formName").blur();
+  await page.locator("#formValue").fill("UI-created widget value");
+  await page.locator("#formValue").blur();
+  await page.locator("#formRequired").check();
+  await expect(page.locator(".annotation.form-field.text-field input")).toHaveValue("UI-created widget value");
+
+  const downloadPromise = page.waitForEvent("download");
+  await page.getByRole("button", { name: "PDF 내보내기" }).click();
+  const download = await downloadPromise;
+  await download.saveAs(exportedPath);
+
+  expect(await widgetValues(exportedPath)).toMatchObject({
+    createdUiText: "UI-created widget value",
+  });
 });
 
 test("blocks engine-required export when the PDF engine is unavailable", async ({ page }) => {

@@ -11,9 +11,26 @@ import {
   type PDFPage,
   type RGB,
 } from "pdf-lib";
-import { base64ToBytes, bytesToBase64 } from "./base64";
+import { bytesToBase64 } from "./base64";
 import { clamp, isMostlyHorizontalText, isNumberArray, multiplyMatrix } from "./geometry";
 import { asMetadataString, emptyMetadata } from "./metadata";
+import {
+  bindCommandButton as bindFeatureCommandButton,
+  configureFeatureCommands,
+  executeCommand,
+  getFeatureCommand,
+  registerCommand,
+  syncCommandButtons,
+} from "./featureCommands";
+import { renderPreflightPanel } from "./preflightPanel";
+import { renderFormFieldInspector } from "./formFieldPanel";
+import { buildEngineSaveOptions } from "./enginePayload";
+import {
+  applyPdfWithEngine,
+  buildEngineEndpoints,
+  preflightPdfWithEngine,
+  validatePdfWithEngine,
+} from "./export/engineClient";
 import type {
   Annotation,
   BoxAnnotation,
@@ -21,7 +38,6 @@ import type {
   DraftState,
   DragState,
   EditorFonts,
-  EngineApplyResponse,
   EngineOperation,
   EnginePayload,
   EngineSourceText,
@@ -35,6 +51,7 @@ import type {
   PdfTextStyle,
   PenAnnotation,
   Point,
+  PreflightReport,
   RedactionMode,
   SaveMode,
   Snapshot,
@@ -90,6 +107,7 @@ const tools: Array<{ id: Tool; label: string; icon: string }> = [
   { id: "highlight", label: "강조", icon: "▰" },
   { id: "pen", label: "그리기", icon: "╱" },
   { id: "rect", label: "도형", icon: "□" },
+  { id: "form", label: "양식", icon: "▣" },
   { id: "redact", label: "지우기", icon: "⌫" },
 ];
 
@@ -98,7 +116,7 @@ const dom = {
   imageInput: document.createElement("input"),
 };
 
-const featureCommands = new Map<string, FeatureCommand>();
+configureFeatureCommands({ onDisabledCommand: showToast });
 
 registerCommand({
   id: "open-file",
@@ -239,14 +257,6 @@ type PageMetrics = {
   width: number;
   height: number;
 };
-type FeatureCommand = {
-  id: string;
-  label: string;
-  implemented: boolean;
-  enabled: () => boolean;
-  disabledReason?: () => string;
-  run?: () => Promise<void> | void;
-};
 type LayoutBlock = {
   id: string;
   pageId: string;
@@ -284,65 +294,17 @@ type EngineExtractPage = {
 type EngineExtractResponse = {
   pages: EngineExtractPage[];
 };
-type PreflightReport = {
-  ok: boolean;
-  warnings: string[];
-  pageCount: number;
-  metadataPresent: boolean;
-  xmpPresent: boolean;
-  embeddedFileCount: number;
-  javascriptCount: number;
-  formFieldCount: number;
-  fontCount: number;
-};
-
-function registerCommand(command: FeatureCommand): void {
-  featureCommands.set(command.id, command);
-}
-
 function bindCommandButton(id: string, commandId: string): void {
   const element = document.getElementById(id);
   if (!(element instanceof HTMLButtonElement)) {
     return;
   }
-  element.dataset.command = commandId;
-  syncCommandButton(element, commandId);
-  element.addEventListener("click", () => void executeCommand(commandId));
-}
-
-function syncCommandButton(button: HTMLButtonElement, commandId: string): void {
-  const command = featureCommands.get(commandId);
-  if (!command || !command.implemented) {
-    button.hidden = true;
+  const command = getFeatureCommand(commandId);
+  if (!command) {
+    element.hidden = true;
     return;
   }
-  button.hidden = false;
-  const enabled = command.enabled();
-  button.disabled = !enabled;
-  button.title = enabled ? button.title || command.label : command.disabledReason?.() ?? "현재 사용할 수 없습니다.";
-}
-
-function syncCommandButtons(): void {
-  document.querySelectorAll<HTMLButtonElement>("[data-command]").forEach((button) => {
-    const commandId = button.dataset.command;
-    if (commandId) {
-      syncCommandButton(button, commandId);
-    }
-  });
-}
-
-async function executeCommand(commandId: string): Promise<void> {
-  const command = featureCommands.get(commandId);
-  if (!command || !command.implemented || !command.run) {
-    return;
-  }
-  if (!command.enabled()) {
-    showToast(command.disabledReason?.() ?? "현재 사용할 수 없습니다.");
-    syncCommandButtons();
-    return;
-  }
-  await command.run();
-  syncCommandButtons();
+  bindFeatureCommandButton(element, command);
 }
 
 function renderApp(): void {
@@ -376,7 +338,7 @@ function renderApp(): void {
         <button type="button" disabled title="주석 명령은 툴바에서 제공합니다.">주석</button>
         <button type="button" disabled title="페이지 명령은 오른쪽 속성 패널에서 제공합니다.">페이지</button>
         <button type="button" disabled title="도구 모음에 구현된 기능만 표시합니다.">도구</button>
-        <button type="button" disabled title="폼 기능은 기존 필드 작성부터 지원합니다.">양식</button>
+        <button type="button" disabled title="양식 생성과 작성은 툴바와 속성 패널에서 제공합니다.">양식</button>
         <button type="button" disabled title="보안 기능은 가리기 정책부터 지원합니다.">보안</button>
       </nav>
       <section class="ribbon" aria-label="PDF 편집 도구">
@@ -394,7 +356,7 @@ function renderApp(): void {
           <button class="rail-item active" type="button"><span>▯</span><small>페이지</small></button>
           <button class="rail-item" type="button" disabled title="북마크 패널은 아직 지원하지 않습니다."><span>⌑</span><small>북마크</small></button>
           <button class="rail-item" type="button" disabled title="주석 목록 패널은 아직 지원하지 않습니다."><span>☰</span><small>주석</small></button>
-          <button class="rail-item" type="button" disabled title="폼 패널은 아직 지원하지 않습니다."><span>▤</span><small>양식</small></button>
+          <button class="rail-item" type="button" disabled title="양식 전용 목록 패널은 아직 지원하지 않습니다. 툴바의 양식 도구를 사용하세요."><span>▤</span><small>양식</small></button>
           <button class="rail-item" type="button" disabled title="첨부파일 패널은 아직 지원하지 않습니다."><span>⌘</span><small>첨부파일</small></button>
         </aside>
         <aside class="sidebar">
@@ -1094,6 +1056,13 @@ function renderFormField(annotation: FormFieldAnnotation, node: HTMLDivElement):
   node.classList.add("form-field", annotation.fieldType === "checkbox" || annotation.fieldType === "radio" ? "checkbox" : "text-field");
   node.style.borderColor = selectedId === annotation.id ? "#176b58" : "rgba(23, 107, 88, 0.55)";
   node.style.background = "rgba(255, 255, 255, 0.72)";
+  if (annotation.fieldType === "signature") {
+    const placeholder = document.createElement("div");
+    placeholder.className = "signature-field-placeholder";
+    placeholder.textContent = annotation.unsupportedReason ?? "서명 필드";
+    node.append(placeholder);
+    return;
+  }
   if (annotation.fieldType === "checkbox" || annotation.fieldType === "radio") {
     const checkbox = document.createElement("input");
     checkbox.type = annotation.fieldType === "radio" ? "radio" : "checkbox";
@@ -1169,6 +1138,28 @@ function setFormFieldChecked(annotation: FormFieldAnnotation, checked: boolean):
   annotation.fieldValue = checked ? annotation.exportValue ?? "Yes" : "Off";
 }
 
+function setNewFormFieldType(annotation: FormFieldAnnotation, fieldType: FormFieldAnnotation["fieldType"]): void {
+  annotation.fieldType = fieldType;
+  annotation.fieldName = annotation.fieldName || nextFormFieldName(fieldType);
+  annotation.exportValue = fieldType === "checkbox" || fieldType === "radio" ? annotation.exportValue ?? "Yes" : undefined;
+  annotation.checked = fieldType === "checkbox" || fieldType === "radio" ? Boolean(annotation.checked) : undefined;
+  if (fieldType === "checkbox" || fieldType === "radio") {
+    annotation.fieldValue = annotation.checked ? annotation.exportValue ?? "Yes" : "Off";
+    annotation.width = Math.min(annotation.width, 0.06);
+    annotation.height = Math.min(annotation.height, 0.04);
+    return;
+  }
+  if (fieldType === "combo" || fieldType === "list") {
+    annotation.options = annotation.options?.length ? annotation.options : ["Option 1", "Option 2"];
+    annotation.fieldValue = annotation.options[0] ?? "";
+    annotation.height = fieldType === "list" ? Math.max(annotation.height, 0.1) : Math.max(annotation.height, 0.05);
+    return;
+  }
+  annotation.fieldValue = annotation.fieldValue === "Off" ? "" : annotation.fieldValue;
+  annotation.options = undefined;
+  annotation.height = Math.max(annotation.height, 0.05);
+}
+
 function renderPen(annotation: PenAnnotation, metrics: PageMetrics): SVGSVGElement {
   const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
   svg.classList.add("pen-stroke");
@@ -1221,6 +1212,11 @@ function handleLayerPointerDown(event: PointerEvent, pageId: string): void {
 
   if (currentTool === "text") {
     addText(pageId, point.x, point.y, metrics);
+    return;
+  }
+
+  if (currentTool === "form") {
+    addFormField(pageId, point.x, point.y, metrics);
     return;
   }
 
@@ -1832,12 +1828,33 @@ function sourceTextFlowOffset(sourceText: SourceTextItem): number {
     const annotationPageIndex = pageItems.findIndex((item) => item.id === annotation.pageId);
     const delta = annotation.height - annotation.eraseOriginal.height;
     if (annotationPageIndex >= 0 && annotationPageIndex < sourcePageIndex) {
-      offset += Math.max(0, delta);
+      offset += crossPageOverflowOffset(annotation);
     } else if (annotation.pageId === sourceText.pageId && isBelowSameFlow(sourceText, annotation)) {
-      offset += annotation.height - annotation.eraseOriginal.height;
+      offset += delta;
     }
   }
   return Math.abs(offset) < 0.002 ? 0 : offset;
+}
+
+function crossPageOverflowOffset(annotation: TextAnnotation): number {
+  if (!annotation.eraseOriginal || !isReflowSourceAnnotation(annotation)) {
+    return 0;
+  }
+  const sourceText = sourceTextForAnnotation(annotation);
+  if (!sourceText) {
+    return 0;
+  }
+  const overflow = annotation.y + annotation.height - pageFlowBottom(annotation.pageId, sourceText);
+  return overflow > 0 ? overflow : 0;
+}
+
+function sourceTextForAnnotation(annotation: TextAnnotation): SourceTextItem | null {
+  if (!annotation.sourceTextId) {
+    return null;
+  }
+  return sourceTextItemsByPage
+    .get(annotation.pageId)
+    ?.find((sourceText) => sourceText.id === annotation.sourceTextId) ?? null;
 }
 
 function isBelowSameFlow(sourceText: SourceTextItem, annotation: TextAnnotation): boolean {
@@ -2150,6 +2167,25 @@ function convertWidgetAnnotation(
   }
   const fieldType = String(raw.fieldType ?? "");
   const fieldValue = String(raw.fieldValue ?? annotationText(raw));
+  const defaultValue = raw.defaultValue == null ? undefined : String(raw.defaultValue);
+  const required = Boolean(raw.required);
+  const readOnly = Boolean(raw.readOnly);
+  if (fieldType === "Sig") {
+    return {
+      ...base,
+      type: "formField",
+      fieldName,
+      fieldType: "signature",
+      fieldValue,
+      defaultValue,
+      required,
+      readOnly: true,
+      tabIndex: Number.isFinite(Number(raw.tabIndex)) ? Number(raw.tabIndex) : undefined,
+      unsupportedReason: "서명 필드는 가져왔지만 디지털 서명 작성은 아직 지원하지 않습니다.",
+      opacity: 1,
+      strokeWidth: base.strokeWidth || 1,
+    };
+  }
   if (fieldType === "Tx") {
     return {
       ...base,
@@ -2157,6 +2193,10 @@ function convertWidgetAnnotation(
       fieldName,
       fieldType: "text",
       fieldValue,
+      defaultValue,
+      required,
+      readOnly,
+      tabIndex: Number.isFinite(Number(raw.tabIndex)) ? Number(raw.tabIndex) : undefined,
       opacity: 1,
       strokeWidth: base.strokeWidth || 1,
     };
@@ -2172,6 +2212,10 @@ function convertWidgetAnnotation(
       fieldValue,
       checked: fieldValue !== "" && fieldValue !== "Off",
       exportValue,
+      defaultValue,
+      required,
+      readOnly,
+      tabIndex: Number.isFinite(Number(raw.tabIndex)) ? Number(raw.tabIndex) : undefined,
       opacity: 1,
       strokeWidth: base.strokeWidth || 1,
     };
@@ -2186,6 +2230,10 @@ function convertWidgetAnnotation(
       fieldValue,
       checked: fieldValue !== "" && fieldValue !== "Off",
       exportValue,
+      defaultValue,
+      required,
+      readOnly,
+      tabIndex: Number.isFinite(Number(raw.tabIndex)) ? Number(raw.tabIndex) : undefined,
       opacity: 1,
       strokeWidth: base.strokeWidth || 1,
     };
@@ -2199,6 +2247,10 @@ function convertWidgetAnnotation(
       fieldName,
       fieldType: isCombo ? "combo" : "list",
       fieldValue,
+      defaultValue,
+      required,
+      readOnly,
+      tabIndex: Number.isFinite(Number(raw.tabIndex)) ? Number(raw.tabIndex) : undefined,
       options,
       opacity: 1,
       strokeWidth: base.strokeWidth || 1,
@@ -2609,6 +2661,53 @@ function addImage(pageId: string, x: number, y: number, dataUrl: string, metrics
   renderCurrentLayer();
 }
 
+function addFormField(pageId: string, x: number, y: number, metrics = fallbackMetrics(pageId)): void {
+  const annotation: FormFieldAnnotation = {
+    id: crypto.randomUUID(),
+    pageId,
+    type: "formField",
+    x: clamp(x / metrics.width, 0, 0.76),
+    y: clamp(y / metrics.height, 0, 0.94),
+    width: 0.24,
+    height: 0.05,
+    color: "#172026",
+    opacity: 1,
+    strokeWidth: 1,
+    fieldName: nextFormFieldName("textField"),
+    fieldType: "text",
+    fieldValue: "",
+    defaultValue: "",
+    required: false,
+    readOnly: false,
+    tabIndex: nextFormTabIndex(pageId),
+    options: ["Option 1", "Option 2"],
+  };
+  annotations.push(annotation);
+  selectedId = annotation.id;
+  currentTool = "select";
+  commitHistory();
+  renderToolbar();
+  renderInspector();
+  renderCurrentLayer();
+}
+
+function nextFormFieldName(prefix: string): string {
+  const names = new Set(
+    annotations
+      .filter((annotation): annotation is FormFieldAnnotation => annotation.type === "formField")
+      .map((annotation) => annotation.fieldName),
+  );
+  let index = names.size + 1;
+  while (names.has(`${prefix}${index}`)) {
+    index += 1;
+  }
+  return `${prefix}${index}`;
+}
+
+function nextFormTabIndex(pageId: string): number {
+  return annotations.filter((annotation) => annotation.type === "formField" && annotation.pageId === pageId).length + 1;
+}
+
 function addBox(
   pageId: string,
   tool: Extract<Tool, "highlight" | "rect" | "redact">,
@@ -2757,7 +2856,7 @@ function renderInspector(): void {
     ${warningPanel}
     ${pageControls}
     ${selected.type === "text" ? textFields(selected) : ""}
-    ${selected.type === "formField" ? formFieldFields(selected) : ""}
+    ${selected.type === "formField" ? renderFormFieldInspector(selected, escapeHtml) : ""}
     ${selected.type !== "image" && selected.type !== "formField" ? colorField(selected) : ""}
     ${selected.type !== "text" && selected.type !== "image" && selected.type !== "formField" ? opacityField(selected) : ""}
     ${selected.type === "pen" || selected.type === "rect" ? strokeField(selected) : ""}
@@ -2804,12 +2903,12 @@ function documentFields(): string {
         <input id="sanitizeHiddenInfo" type="checkbox"${sanitizeHiddenInfo ? " checked" : ""} />
         숨은 정보 제거
       </label>
-      <p class="status-line">메타데이터, XMP, 첨부파일, JavaScript/action, 링크, 썸네일을 저장 시 제거합니다.</p>
+      <p class="status-line">메타데이터, XMP, 첨부파일, 주석/action, JavaScript name tree, 숨은 레이어, 링크, 썸네일을 저장 시 제거합니다.</p>
     </div>
     <div class="mini-actions">
       <button id="preflightButton" type="button">사전 검사</button>
     </div>
-    ${lastPreflightReport ? preflightSummary(lastPreflightReport) : ""}
+    ${lastPreflightReport ? renderPreflightPanel(lastPreflightReport, escapeHtml) : ""}
     <details class="metadata-panel">
       <summary>문서 메타데이터</summary>
       <div class="field">
@@ -2832,17 +2931,6 @@ function documentFields(): string {
   `;
 }
 
-function preflightSummary(report: PreflightReport): string {
-  const warningText = report.warnings.length ? `${report.warnings.length}개 경고` : "경고 없음";
-  return `
-    <div class="preflight-panel">
-      <strong>사전 검사: ${report.ok ? "통과" : "확인 필요"}</strong>
-      <span>${report.pageCount}쪽 · ${report.fontCount}개 폰트 · ${report.formFieldCount}개 폼 필드 · ${warningText}</span>
-      ${report.warnings.length ? `<small>${escapeHtml(report.warnings.slice(0, 3).join(" · "))}</small>` : ""}
-    </div>
-  `;
-}
-
 function textFields(annotation: TextAnnotation): string {
   return `
     <div class="field">
@@ -2854,40 +2942,6 @@ function textFields(annotation: TextAnnotation): string {
       <input id="fontSize" type="number" min="8" max="96" step="1" value="${annotation.fontSize}" />
     </div>
   `;
-}
-
-function formFieldFields(annotation: FormFieldAnnotation): string {
-  const valueControl = annotation.fieldType === "checkbox" || annotation.fieldType === "radio"
-    ? `
-      <label class="checkbox-line">
-        <input id="formChecked" type="checkbox"${annotation.checked ? " checked" : ""} />
-        선택됨
-      </label>
-    `
-    : annotation.fieldType === "combo" || annotation.fieldType === "list"
-      ? `
-        <select id="formValue"${annotation.fieldType === "list" ? " size=\"4\"" : ""}>
-          ${formFieldOptions(annotation)}
-        </select>
-      `
-    : `<input id="formValue" type="text" value="${escapeHtml(annotation.fieldValue)}" />`;
-  return `
-    <div class="field">
-      <label>폼 필드</label>
-      <input id="formName" type="text" value="${escapeHtml(annotation.fieldName)}" disabled />
-    </div>
-    <div class="field">
-      <label>값</label>
-      ${valueControl}
-    </div>
-  `;
-}
-
-function formFieldOptions(annotation: FormFieldAnnotation): string {
-  const options = annotation.options?.length ? annotation.options : [annotation.fieldValue].filter(Boolean);
-  return options
-    .map((option) => `<option value="${escapeHtml(option)}"${option === annotation.fieldValue ? " selected" : ""}>${escapeHtml(option)}</option>`)
-    .join("");
 }
 
 function colorField(annotation: Annotation): string {
@@ -3014,9 +3068,50 @@ function bindInspectorFields(annotation: Annotation): void {
 
   const formValue = document.querySelector<HTMLInputElement | HTMLSelectElement>("#formValue");
   formValue?.addEventListener("change", () => {
-    if (annotation.type === "formField" && annotation.fieldType !== "checkbox" && annotation.fieldType !== "radio") {
+    if (
+      annotation.type === "formField" &&
+      annotation.fieldType !== "checkbox" &&
+      annotation.fieldType !== "radio" &&
+      annotation.fieldType !== "signature"
+    ) {
       annotation.fieldValue = formValue.value;
       markAnnotationDirty(annotation);
+      commitHistory();
+      renderInspector();
+      renderCurrentLayer();
+    }
+  });
+
+  const formName = document.querySelector<HTMLInputElement>("#formName");
+  formName?.addEventListener("change", () => {
+    if (annotation.type === "formField" && !annotation.sourceAnnotationId) {
+      annotation.fieldName = formName.value.trim() || nextFormFieldName("field");
+      commitHistory();
+      renderInspector();
+      renderCurrentLayer();
+    }
+  });
+
+  const formType = document.querySelector<HTMLSelectElement>("#formType");
+  formType?.addEventListener("change", () => {
+    if (annotation.type === "formField" && !annotation.sourceAnnotationId) {
+      setNewFormFieldType(annotation, formType.value as FormFieldAnnotation["fieldType"]);
+      commitHistory();
+      renderInspector();
+      renderCurrentLayer();
+    }
+  });
+
+  const formOptions = document.querySelector<HTMLTextAreaElement>("#formOptions");
+  formOptions?.addEventListener("change", () => {
+    if (annotation.type === "formField" && (annotation.fieldType === "combo" || annotation.fieldType === "list")) {
+      annotation.options = formOptions.value
+        .split(/\r?\n/)
+        .map((option) => option.trim())
+        .filter(Boolean);
+      if (annotation.options.length && !annotation.options.includes(annotation.fieldValue)) {
+        annotation.fieldValue = annotation.options[0];
+      }
       commitHistory();
       renderInspector();
       renderCurrentLayer();
@@ -3027,6 +3122,40 @@ function bindInspectorFields(annotation: Annotation): void {
   formChecked?.addEventListener("change", () => {
     if (annotation.type === "formField" && (annotation.fieldType === "checkbox" || annotation.fieldType === "radio")) {
       setFormFieldChecked(annotation, formChecked.checked);
+      markAnnotationDirty(annotation);
+      commitHistory();
+      renderInspector();
+      renderCurrentLayer();
+    }
+  });
+
+  const formRequired = document.querySelector<HTMLInputElement>("#formRequired");
+  formRequired?.addEventListener("change", () => {
+    if (annotation.type === "formField" && annotation.fieldType !== "signature") {
+      annotation.required = formRequired.checked;
+      markAnnotationDirty(annotation);
+      commitHistory();
+      renderInspector();
+      renderCurrentLayer();
+    }
+  });
+
+  const formDefaultValue = document.querySelector<HTMLInputElement>("#formDefaultValue");
+  formDefaultValue?.addEventListener("change", () => {
+    if (annotation.type === "formField" && annotation.fieldType !== "signature") {
+      annotation.defaultValue = formDefaultValue.value;
+      markAnnotationDirty(annotation);
+      commitHistory();
+      renderInspector();
+      renderCurrentLayer();
+    }
+  });
+
+  const formTabIndex = document.querySelector<HTMLInputElement>("#formTabIndex");
+  formTabIndex?.addEventListener("change", () => {
+    if (annotation.type === "formField" && annotation.fieldType !== "signature") {
+      const value = Number(formTabIndex.value);
+      annotation.tabIndex = Number.isFinite(value) && value > 0 ? Math.round(value) : undefined;
       markAnnotationDirty(annotation);
       commitHistory();
       renderInspector();
@@ -3428,7 +3557,7 @@ async function runPreflightCheck(): Promise<void> {
     showToast(error instanceof Error ? error.message : "사전 검사할 PDF를 만들 수 없습니다.");
     return;
   }
-  const report = await tryPreflightWithEngine(bytes);
+  const report = await preflightPdfWithEngine(bytes);
   if (!report) {
     showToast("PDF 엔진 사전 검사를 실행할 수 없습니다. npm run engine:serve를 확인하세요.");
     return;
@@ -3436,47 +3565,6 @@ async function runPreflightCheck(): Promise<void> {
   lastPreflightReport = report;
   renderInspector();
   showToast(report.warnings.length ? `사전 검사 경고 ${report.warnings.length}개` : "사전 검사 통과");
-}
-
-async function tryPreflightWithEngine(bytes: Uint8Array): Promise<PreflightReport | null> {
-  const endpoints = buildEngineEndpoints("/api/pdf/preflight");
-  for (const endpoint of endpoints) {
-    try {
-      const response = await fetch(endpoint, {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-        },
-        body: JSON.stringify({ pdfBase64: bytesToBase64(bytes) }),
-      });
-      if (!response.ok) {
-        continue;
-      }
-      const result: unknown = await response.json();
-      if (isPreflightReport(result)) {
-        return result;
-      }
-    } catch (error) {
-      console.warn(`PDF engine preflight failed at ${endpoint}`, error);
-    }
-  }
-  const validation = await tryValidateWithEngine(bytes);
-  if (!validation) {
-    return null;
-  }
-  return {
-    ok: validation.ok,
-    warnings: validation.errors.length
-      ? validation.errors
-      : ["전체 사전 검사 endpoint를 사용할 수 없어 구조 검증만 실행했습니다."],
-    pageCount: validation.pageCount,
-    metadataPresent: false,
-    xmpPresent: false,
-    embeddedFileCount: 0,
-    javascriptCount: 0,
-    formFieldCount: 0,
-    fontCount: 0,
-  };
 }
 
 async function buildExportPdfBytes(): Promise<Uint8Array> {
@@ -3550,37 +3638,7 @@ async function tryExportWithEngine(): Promise<Uint8Array | null> {
     return null;
   }
   const payload = buildEnginePayload(originalBytes);
-  const endpoints = buildEngineEndpoints();
-  for (const endpoint of endpoints) {
-    try {
-      const response = await fetch(endpoint, {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-        },
-        body: JSON.stringify(payload),
-      });
-      if (!response.ok) {
-        continue;
-      }
-      const result: unknown = await response.json();
-      if (isEngineApplyResponse(result)) {
-        return base64ToBytes(result.pdfBase64);
-      }
-    } catch (error) {
-      console.warn(`PDF engine export failed at ${endpoint}`, error);
-    }
-  }
-  return null;
-}
-
-function buildEngineEndpoints(apiPath = "/api/pdf/apply"): string[] {
-  const sameOriginEndpoint = `${window.location.origin}${apiPath}`;
-  const localEngineEndpoint = `http://127.0.0.1:8787${apiPath}`;
-  const isLocalDevelopment = ["127.0.0.1", "localhost"].includes(window.location.hostname);
-  return !isLocalDevelopment || sameOriginEndpoint === localEngineEndpoint
-    ? [sameOriginEndpoint]
-    : [sameOriginEndpoint, localEngineEndpoint];
+  return applyPdfWithEngine(payload);
 }
 
 function buildEnginePayload(bytes: Uint8Array): EnginePayload {
@@ -3615,22 +3673,7 @@ function buildEnginePayload(bytes: Uint8Array): EnginePayload {
     operations: [...deleteOperations, ...flowSliceOperations, ...annotationOperations, ...flowOperations],
     sourceTexts: buildEngineSourceTexts(pageIndexById),
     metadata: documentMetadata,
-    saveOptions: {
-      annotationMode: saveMode,
-      redactionMode,
-      flattenForms: false,
-      sanitize: sanitizeHiddenInfo,
-      sanitizeOptions: {
-        metadata: true,
-        xmlMetadata: true,
-        embeddedFiles: true,
-        javascript: true,
-        links: true,
-        thumbnails: true,
-        resetFormFields: false,
-      },
-      validate: true,
-    },
+    saveOptions: buildEngineSaveOptions({ saveMode, redactionMode, sanitizeHiddenInfo }),
   };
 }
 
@@ -3826,11 +3869,17 @@ function annotationToEngineOperation(annotation: Annotation, pageIndex: number):
   if (annotation.type === "formField") {
     return {
       ...base,
+      sourceAnnotationId: annotation.sourceAnnotationId,
+      create: !annotation.sourceAnnotationId,
       fieldName: annotation.fieldName,
       fieldType: annotation.fieldType,
       fieldValue: annotation.fieldValue,
       checked: annotation.checked,
       exportValue: annotation.exportValue,
+      defaultValue: annotation.defaultValue,
+      required: annotation.required,
+      readOnly: annotation.readOnly,
+      tabIndex: annotation.tabIndex,
       options: annotation.options,
     };
   }
@@ -3843,14 +3892,6 @@ function annotationToEngineOperation(annotation: Annotation, pageIndex: number):
   }
 
   return base;
-}
-
-function isEngineApplyResponse(value: unknown): value is EngineApplyResponse {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    typeof (value as Record<string, unknown>).pdfBase64 === "string"
-  );
 }
 
 function isEngineExtractResponse(value: unknown): value is EngineExtractResponse {
@@ -3906,7 +3947,7 @@ async function validateExportedPdf(bytes: Uint8Array, expectedPageCount: number)
     errors.push(error instanceof Error ? error.message : "exported PDF could not be opened");
   }
 
-  engineValidation = await tryValidateWithEngine(bytes);
+  engineValidation = await validatePdfWithEngine(bytes);
   if (engineValidation) {
     if (engineValidation.pageCount !== expectedPageCount) {
       errors.push(`engine page count ${engineValidation.pageCount} != expected ${expectedPageCount}`);
@@ -3926,62 +3967,6 @@ async function validateExportedPdf(bytes: Uint8Array, expectedPageCount: number)
     pageSizes: engineValidation?.pageSizes,
     errors,
   };
-}
-
-async function tryValidateWithEngine(bytes: Uint8Array): Promise<ExportValidation | null> {
-  const endpoints = buildEngineEndpoints("/api/pdf/validate");
-  for (const endpoint of endpoints) {
-    try {
-      const response = await fetch(endpoint, {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-        },
-        body: JSON.stringify({ pdfBase64: bytesToBase64(bytes) }),
-      });
-      if (!response.ok) {
-        continue;
-      }
-      const result: unknown = await response.json();
-      if (isExportValidation(result)) {
-        return result;
-      }
-    } catch (error) {
-      console.warn(`PDF engine validation failed at ${endpoint}`, error);
-    }
-  }
-  return null;
-}
-
-function isExportValidation(value: unknown): value is ExportValidation {
-  if (typeof value !== "object" || value === null) {
-    return false;
-  }
-  const candidate = value as Record<string, unknown>;
-  return (
-    typeof candidate.ok === "boolean" &&
-    typeof candidate.pageCount === "number" &&
-    typeof candidate.encrypted === "boolean" &&
-    Array.isArray(candidate.errors)
-  );
-}
-
-function isPreflightReport(value: unknown): value is PreflightReport {
-  if (typeof value !== "object" || value === null) {
-    return false;
-  }
-  const candidate = value as Record<string, unknown>;
-  return (
-    typeof candidate.ok === "boolean" &&
-    Array.isArray(candidate.warnings) &&
-    typeof candidate.pageCount === "number" &&
-    typeof candidate.metadataPresent === "boolean" &&
-    typeof candidate.xmpPresent === "boolean" &&
-    typeof candidate.embeddedFileCount === "number" &&
-    typeof candidate.javascriptCount === "number" &&
-    typeof candidate.formFieldCount === "number" &&
-    typeof candidate.fontCount === "number"
-  );
 }
 
 function applyPdfLibMetadata(document: PDFDocument): void {

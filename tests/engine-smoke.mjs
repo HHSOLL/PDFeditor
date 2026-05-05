@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -13,6 +14,8 @@ const apiOutputPath = path.join(workDir, "api-output.pdf");
 const opsPath = path.join(workDir, "ops.json");
 const renderPath = path.join(workDir, "api-output.png");
 const enginePath = path.join(root, "engine", "pdf_engine.py");
+const enginePython = process.env.PDF_ENGINE_PYTHON ||
+  (existsSync(path.join(root, ".venv", "bin", "python")) ? path.join(root, ".venv", "bin", "python") : "python3");
 const replacementText = "상용 엔진 수정 완료";
 const nativeModeKoreanText = "네이티브 모드 한글 텍스트";
 const enginePayload = {
@@ -302,7 +305,8 @@ async function waitForHealth() {
 
 function runProcess(command, args) {
   return new Promise((resolve, reject) => {
-    const child = spawn(command, args, { cwd: root, stdio: ["ignore", "pipe", "pipe"] });
+    const resolvedCommand = command === "python3" ? enginePython : command;
+    const child = spawn(resolvedCommand, args, { cwd: root, stdio: ["ignore", "pipe", "pipe"] });
     const stdout = [];
     const stderr = [];
     child.stdout.on("data", (chunk) => stdout.push(chunk));
@@ -314,7 +318,7 @@ function runProcess(command, args) {
         stderr: Buffer.concat(stderr).toString("utf8"),
       };
       if (code !== 0) {
-        reject(new Error(`${command} exited ${code}\n${output.stderr}`));
+        reject(new Error(`${resolvedCommand} exited ${code}\n${output.stderr}`));
         return;
       }
       resolve(output);

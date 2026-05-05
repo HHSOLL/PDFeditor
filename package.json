@@ -6,13 +6,14 @@
   "scripts": {
     "dev": "vite --host 127.0.0.1",
     "build": "tsc && vite build",
-    "engine:install": "python3 -m pip install --user -r engine/requirements.txt",
+    "engine:install": "python3 -m venv .venv && .venv/bin/python -m pip install -r engine/requirements.txt",
     "engine:serve": "node server/pdf-engine-server.mjs",
     "serve": "node server/pdf-engine-server.mjs",
     "ensure:qpdf": "node tests/ensure-qpdf.mjs",
+    "ensure:ocr": "node tests/ensure-ocr.mjs",
     "test:engine": "node tests/run-engine-tests.mjs",
     "test:e2e": "playwright test",
-    "verify:local": "npm run ensure:qpdf && REQUIRE_QPDF=1 VITE_STRICT_ENGINE=true npm run build && REQUIRE_QPDF=1 npm run test:engine && REQUIRE_QPDF=1 VITE_STRICT_ENGINE=true npm run test:e2e -- --reporter=list && npm audit --audit-level=moderate",
+    "verify:local": "npm run ensure:qpdf && npm run ensure:ocr && REQUIRE_QPDF=1 VITE_STRICT_ENGINE=true npm run build && REQUIRE_QPDF=1 REQUIRE_OCR=1 npm run test:engine && REQUIRE_QPDF=1 VITE_STRICT_ENGINE=true npm run test:e2e -- --reporter=list && npm audit --audit-level=moderate",
     "preview": "vite preview --host 127.0.0.1"
   },
   "dependencies": {

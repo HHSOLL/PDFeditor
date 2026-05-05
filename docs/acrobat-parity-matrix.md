@@ -1,38 +1,62 @@
 # Acrobat Parity Matrix
 
-This matrix defines the 100-point target. A feature scores only when its save
-behavior is verified with fixtures and compatibility checks.
+This matrix is the release gate for any "Acrobat Pro grade" claim. A feature is
+credited only when it is saved into PDF structure, reopened, and validated by
+automated fixtures. UI-only buttons, overlay-only previews, and screenshot-based
+exports score zero.
 
-| Area | Points | Current | Completion Evidence |
-| --- | ---: | --- | --- |
-| Core PDF compatibility | 15 | Strict local validation and qpdf are in place | 100+ corpus PDFs pass open/render/export/reopen |
-| Edit PDF | 15 | Redaction plus replacement text; first-pass semantic paragraph reflow; new image/text objects | Text/image/vector fixtures roundtrip with 2px tolerance |
-| Page organization | 8 | Delete, reorder, rotate, duplicate, extract | Merge/split/crop/replace plus bookmarks/links/forms remap |
-| Comments/annotations | 8 | New annotations plus existing Square/FreeText/Highlight/Ink import/edit/delete path | Acrobat/Preview/Chrome annotations import/edit/delete/flatten |
-| Forms | 10 | AcroForm text, checkbox, radio, combo, and list fill/save, engine flatten path | AcroForm fields fill/save/flatten with appearance regeneration |
-| Signatures/security | 10 | Password-aware open/apply only | Image signatures and certificate signing validate in Acrobat |
-| Redaction/sanitization | 10 | Redaction policies tested; hidden-info sanitizer removes metadata, XMP, embedded files, JavaScript/actions, links, and thumbnails | Hidden information sanitizer also covers hidden layers, comments, stale incremental data, search indexes, and unreferenced data |
-| OCR/conversion | 8 | Not implemented | Searchable scanned PDFs with OCR correction |
-| Accessibility | 6 | Not implemented | Tags, reading order, alt text, PDF/UA basic report |
-| Print production/preflight | 5 | qpdf structural checks plus basic engine preflight for metadata, XMP, embedded files, JavaScript/actions, forms, fonts, images, drawings, annotations, and page boxes | PDF/A/X, font, image, color, page-box reports with fixups |
-| Compare/batch automation | 4 | Not implemented | Compare report and saved batch action execution |
-| Packaging/performance/support | 1 | Local web app | Desktop package, large-file benchmarks, crash recovery |
+## Scoring Snapshot
 
-## Current Score
+Current automated score: **81 / 100**.
 
-The current project is a verified advanced prototype, not an Acrobat Pro
-replacement. It scores highest in save validation and has working first-pass
-forms, imported annotations, hidden-info sanitization, and basic preflight
-reporting. Signatures, OCR, accessibility, PDF/A/X preflight fixups, compare,
-batch automation, and full object editing remain outside the completed support
-boundary.
+This is a verified advanced prototype. It is not yet an Acrobat Pro replacement.
+The strongest areas are continuous viewer behavior, qpdf/PyMuPDF/PDF.js export
+validation, imported annotations, AcroForm filling and field creation including
+signature widgets, XFDF import/export, report-only preflight with report PDF
+export and PDF/A claim diagnostics, hidden-info sanitizer coverage, engine-backed
+page organization including external PDF page insertion and bookmark remapping,
+CMS ByteRange certificate signing with DocMDP lock policy, local OCR searchable
+PDF export with Korean corpus and scanned-page correction rebuilding, simple
+visible signatures, password/permission saving, existing image move/replace
+paths, vector delete, file attachment comments, changed-region compare report
+data, and 100-job batch apply evidence. Timestamped PAdES/LTV trust, full
+PDF/UA validation, PDF/A/X certification/fixups, full vector editing,
+action-builder UI, and packaged production deployment remain non-claimable.
 
-## Current Reflow Score Boundary
+| Area | Target Points | Current Points | Current Status | Automated Evidence | Completion Criteria | Remaining Work |
+| --- | ---: | ---: | --- | --- | --- | --- |
+| Core PDF compatibility | 10 | 8 | Strict engine validation, qpdf-required local verification, PDF.js reopen checks, PyMuPDF validation metrics, expanded engine corpus for page ops/redaction/image/compare/batch/encryption/signature/XFDF/accessibility-report | `tests/engine-smoke.mjs`, `tests/engine-render-diff.mjs`, `tests/engine-page-ops.mjs`, `tests/engine-page-merge-external.mjs`, `tests/engine-password-permissions.mjs`, `tests/engine-signature-simple.mjs`, `tests/engine-forms-xfdf.mjs`, `tests/engine-accessibility-report.mjs`, `tests/pdf-editor.spec.ts`, `npm run verify:local` | 100+ corpus PDFs pass open/render/export/reopen with qpdf, PyMuPDF, PDF.js, and documented Acrobat/Preview/Chrome smoke | Expand third-party corpus, add Acrobat/Preview/Chrome visual smoke records for every release gate |
+| Continuous viewer / performance | 8 | 5 | Continuous page stack, independent center viewport, page-scoped metrics, lazy page rendering path | `tests/pdf-editor.spec.ts`, `tests/engine-large-document.mjs` | 100/300/500/1000 page PDFs open without eager canvas rendering; first page visible time recorded; side panels never scroll with document | Add 1000-page fixture, record rendered canvas count and rough memory ceiling |
+| Text editing / semantic reflow | 14 | 5 | Redaction plus replacement, first-pass paragraph reflow, protected figure/caption avoidance, cross-page cascade tests | `tests/engine-reflow.mjs`, `tests/pdf-editor.spec.ts` reflow cases | Paragraph font/size/color/alignment edits preserve structure, avoid figure/table/caption collisions, cascade across pages, save searchable text, and remove replaced raw/source text | Improve columns/tables/RTL/emoji handling, native movement of source images/vector tables, Acrobat/Preview manual smoke |
+| Native image/vector/object editing | 8 | 6 | Existing image detection plus engine-backed delete/replace/move path removes or redacts the source image area; vector drawings are extracted and `deleteVector` removes touched line art through PDF redaction graphics removal | `tests/engine-image-object-edit.mjs`, `tests/engine-image-move.mjs`, `tests/engine-vector-object-edit.mjs`, source image coverage inside `tests/engine-smoke.mjs` and UI regression paths | Existing images can be selected/moved/resized/rotated/cropped/deleted/replaced; image data and vector paths are actually removed or rewritten | Add image resize/rotate/crop UI, vector move/color/stroke editing, object inspector, image raw-byte corpus |
+| Page organization | 8 | 8 | Delete, reorder, rotate, duplicate, extract, blank page insertion, external PDF page insertion, cropBox persistence, resize/mediaBox persistence, mixed page size roundtrip, and source bookmark remapping for reordered primary-source pages | `tests/engine-page-ops.mjs`, `tests/engine-page-merge-external.mjs`, `tests/engine-page-bookmark-remap.mjs`, `tests/pdf-editor.spec.ts` | Insert blank/from PDF, merge, split, crop, resize, replace pages while preserving bookmarks, links, labels, forms, annotations, named destinations | Add split/replace UI polish, richer link/named-destination remap corpus, manual Acrobat/Preview smoke |
+| Comments / annotations | 7 | 5 | Existing source annotation import/edit/delete for common annotation types, native export and flatten paths, plus engine-backed file attachment comment creation | `tests/engine-smoke.mjs`, `tests/engine-file-attachment-annotation.mjs`, annotation cases in `tests/pdf-editor.spec.ts` | Acrobat/Preview/Chrome-created Sticky, FreeText, Highlight, Underline, Strikeout, Squiggly, Ink, Line, Arrow, Rectangle, Circle, Polygon, Stamp, file attachment comments import/edit/delete/flatten | Add reply threads, stamps, XFDF/FDF comment import/export, cross-viewer corpus |
+| AcroForm | 10 | 9 | Text, checkbox, radio, combo, list fill/save; new text/checkbox/radio/combo/list/signature field creation; required/default/export values; appearance streams; tab order; XFDF export/import; XFA detection | `tests/engine-forms.mjs`, `tests/engine-forms-xfdf.mjs`, `tests/engine-form-signature-field.mjs`, form UI cases in `tests/pdf-editor.spec.ts` | Full form edit/delete/move/resize workflows, richer field metadata UI, tab order editor, appearance regeneration corpus, flatten, FDF/XFDF, signature fields, XFA unsupported warning or limited support | Add richer appearance compatibility corpus, manual Acrobat/Preview/Chrome form smoke |
+| Signatures / security | 8 | 7 | Typed/drawn/image signature appearances; AES-256 user/owner password encryption; real signature field creation with `/ByteRange`, `/Contents`, `/Adobe.PPKLite`, detached CMS signing through OpenSSL, validation that detects tampering, and DocMDP lock policy encoding | `tests/engine-signature-simple.mjs`, `tests/engine-digital-signature.mjs`, `tests/engine-password-permissions.mjs`, `tests/engine-smoke.mjs` password paths | Signature field creation, CMS/PKCS#7 or PAdES ByteRange signing, timestamp, validation, signed-document lock, Acrobat-visible permission policies | Add timestamp/LTV/revocation data, trusted certificate policy UI, Acrobat signature validation smoke |
+| Full redaction / sanitizer | 10 | 7 | Real redaction policies; literal search, regex, whole-page redaction; sanitizer removes metadata, XMP, embedded files, file attachment annotations, comments, annotation actions, JavaScript/name trees, link actions, hidden layer catalog entries, search-index signals, stale incremental saves, unreferenced object signals, thumbnails | `tests/engine-sanitizer-preflight.mjs`, `tests/engine-search-redaction.mjs`, redaction tests in `tests/engine-smoke.mjs` | Search/regex/whole-page redaction plus full hidden-data sanitizer leaves no secrets in text extraction, raw bytes, xref scan, unreferenced data, attachments, JS/actions, OCG, comments, stale history | Add third-party hidden-data corpus, obscured content removal, multimedia/RichMedia, Acrobat Pro sanitizer manual smoke |
+| OCR / scanned PDF editing | 7 | 6 | Local Tesseract-backed OCR status checks, English and Korean scanned image-over-text PDF export, and scanned-page correction rebuilding that replaces stale OCR text layers with corrected invisible searchable text | `tests/ensure-ocr.mjs`, `tests/engine-ocr-searchable.mjs`, `tests/engine-ocr-korean-correction.mjs`, CI installs Tesseract English/Korean language data | Scanned Korean/English PDFs become searchable/editable with OCR text layer, correction UI, image-over-text save, qpdf/PyMuPDF validation | Add browser correction UI, cloud/queue OCR worker, deskew/orientation preprocessing |
+| Accessibility / PDF/UA | 6 | 4 | Basic accessibility report plus structural repair for title, document language, MarkInfo/StructTreeRoot signal, page tab order, and image object alternate-text metadata | `tests/engine-accessibility-report.mjs`, `tests/engine-accessibility-repair.mjs` | Document title/language, tag tree import/edit, reading order, alt text, artifacts, form descriptions, PDF/UA basic report and tagged save | Add real tag-tree editor, reading-order authoring, artifact marking, PDF/UA validator, tagged corpus |
+| Preflight / PDF/A / PDF/X / print production | 6 | 4 | Report-only preflight for structure, hidden-info signals, forms, fonts, page boxes, images, drawings, annotations, XFA/signature indicators, PDF/A/PDF/X claim diagnostics, OutputIntent signals, plus generated report PDF | `tests/engine-sanitizer-preflight.mjs`, `tests/engine-preflight-report.mjs`, `tests/engine-preflight-standards-signals.mjs`, `docs/manual-smoke-2026-05-04.md` | PDF/A and PDF/X validation, font/image/color/pagebox/ICC/spot/overprint/transparency checks, output preview, report export, limited fixups verified against Acrobat Pro | Keep fixups/certification unclaimed; evaluate veraPDF/pro SDK; add PDF/A/X corpus and manual comparison |
+| Compare files | 3 | 3 | Engine CLI returns page count changes, changed page list, text previews, render-diff metrics, changed-area bounding regions, and an optional report PDF | `tests/engine-compare.mjs` | Text/render/annotation/page/object diff with changed-area overlay and report PDF | Add annotation/object diff and user-facing overlay UI |
+| Batch action / automation | 3 | 3 | Engine manifest runner applies PDF jobs with per-job validation and failure reporting; tested with text insertion, search redaction, sanitizer jobs, and a 100-output batch corpus | `tests/engine-batch-action.mjs`, `tests/engine-batch-100.mjs` | Saved action builder runs OCR, sanitize, redact, watermark, flatten, split/merge, preflight, convert across 100 PDFs with logs and failure report | Add saved action UI, queue/worker model, OCR/convert/preflight steps |
+| Packaging / deployment / productization | 2 | 1 | Local web app with Python engine server and strict local verification | `npm run verify:local`, GitHub Actions strict engine path | Web deployment, queued workers, object storage, auth, billing, audit logs, virus scan, retention policy, desktop/local package, crash recovery | Build production backend, queue, storage, desktop package, release smoke |
 
-The current semantic reflow implementation is a first pass, not full Acrobat
-inline editing. It groups extractable horizontal text into paragraph blocks,
-moves downstream text in the same flow, avoids protected figure/image/caption
-blocks, and can cascade moved text to following pages. It does not yet move
-existing vector tables or original image objects as native PDF objects. Export
-is blocked when the solver cannot produce a non-overlapping searchable text
-layout.
+## Non-Claimable Boundaries
+
+- **Preflight fixups:** current preflight is report-only. PDF/A/X certification and fixups require veraPDF, a professional SDK, or an equivalent validated engine.
+- **Digital signatures:** CMS ByteRange signing, DocMDP lock policy encoding, and cryptographic validation are implemented. Timestamping, LTV/revocation data, and enterprise trust stores are not claimed.
+- **OCR:** local searchable-PDF OCR, Korean fixture coverage, and scanned-page correction rebuilding are implemented. Browser correction UI, scanned semantic text editing beyond corrected invisible text layers, deskew/orientation preprocessing, and production OCR queues are not claimed.
+- **Accessibility/PDF/UA:** basic reporting and structural repair for title/language/tag signal/alt text exist, but full tag-tree editing, reading-order repair, artifact marking, and PDF/UA checks are not implemented.
+- **Native vector editing:** vector detection/delete is implemented; vector movement, color/stroke editing, and object inspector workflows are not complete.
+- **Compare:** current compare has JSON/report PDF output and changed-area regions, but not an Acrobat-style interactive overlay UI with annotation/object diff.
+- **Batch automation:** current batch support is a validated 100-job engine manifest runner, not a saved action-builder UI or queued production worker.
+- **Full Acrobat parity:** no 100-point claim is allowed until every row above reaches its completion criteria and manual smoke records are complete.
+
+## Current Reflow Boundary
+
+The current semantic reflow implementation is a first pass. It groups
+extractable horizontal text into paragraph blocks, moves downstream text in the
+same flow, avoids protected figure/image/caption blocks, and can cascade moved
+text to following pages. It does not yet natively move existing vector tables or
+original image objects. Export is blocked when the solver cannot produce a
+non-overlapping searchable text layout.

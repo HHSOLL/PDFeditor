@@ -10,6 +10,8 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, "..");
 const distRoot = path.join(root, "dist");
 const enginePath = path.join(root, "engine", "pdf_engine.py");
+const enginePython = process.env.PDF_ENGINE_PYTHON ||
+  (existsSync(path.join(root, ".venv", "bin", "python")) ? path.join(root, ".venv", "bin", "python") : "python3");
 const port = Number(process.env.PORT || 8787);
 const maxBodyBytes = 80 * 1024 * 1024;
 
@@ -58,6 +60,52 @@ const server = createServer(async (request, response) => {
     if (request.method === "POST" && request.url === "/api/pdf/preflight") {
       const payload = await readJsonBody(request);
       const result = await runEngine(["preflight", "--stdin", "--stdout"], payload);
+      sendJson(response, 200, result);
+      return;
+    }
+
+    if (request.method === "POST" && request.url === "/api/pdf/ocr") {
+      const payload = await readJsonBody(request);
+      const result = await runEngine(["ocr", "--stdin", "--stdout"], payload);
+      sendJson(response, 200, result);
+      return;
+    }
+
+    if (request.method === "POST" && request.url === "/api/pdf/ocr-status") {
+      const payload = await readJsonBody(request);
+      const args = ["ocr-status", "--language", String(payload.language || "eng"), "--stdout"];
+      if (payload.tessdata) {
+        args.push("--tessdata", String(payload.tessdata));
+      }
+      const result = await runEngine(args, {});
+      sendJson(response, 200, result);
+      return;
+    }
+
+    if (request.method === "POST" && request.url === "/api/pdf/ocr-correct") {
+      const payload = await readJsonBody(request);
+      const result = await runEngine(["ocr-correct", "--stdin", "--stdout"], payload);
+      sendJson(response, 200, result);
+      return;
+    }
+
+    if (request.method === "POST" && request.url === "/api/pdf/accessibility-repair") {
+      const payload = await readJsonBody(request);
+      const result = await runEngine(["accessibility-repair", "--stdin", "--stdout"], payload);
+      sendJson(response, 200, result);
+      return;
+    }
+
+    if (request.method === "POST" && request.url === "/api/pdf/cert-sign") {
+      const payload = await readJsonBody(request);
+      const result = await runEngine(["cert-sign", "--stdin", "--stdout"], payload);
+      sendJson(response, 200, result);
+      return;
+    }
+
+    if (request.method === "POST" && request.url === "/api/pdf/signature-validate") {
+      const payload = await readJsonBody(request);
+      const result = await runEngine(["signature-validate", "--stdin", "--stdout"], payload);
       sendJson(response, 200, result);
       return;
     }
@@ -112,7 +160,7 @@ function runEngine(args, payload) {
   }
 
   return new Promise((resolve, reject) => {
-    const child = spawn("python3", [enginePath, ...args], {
+    const child = spawn(enginePython, [enginePath, ...args], {
       cwd: root,
       stdio: ["pipe", "pipe", "pipe"],
     });

@@ -22,11 +22,14 @@ Redaction is complete only when:
 ## Sanitization Target
 
 The implemented sanitizer currently removes metadata, XMP, embedded files,
-JavaScript/actions, catalog open actions, name trees, links/actions,
-thumbnails, and optionally stored form values. Sanitized output must also pass
-qpdf validation and must not contain the removed secrets in raw PDF bytes.
+file-attachment annotations, comments, annotation actions, JavaScript/actions,
+catalog open actions, JavaScript name trees, link actions, hidden layer catalog
+signals, embedded search-index catalog signals, thumbnails, stale incremental
+save sections, unreferenced object signals, and optionally stored form values.
+Sanitized output must also pass qpdf validation and must not contain the
+removed fixture secrets in raw PDF bytes.
 
-The remaining Acrobat-class sanitization target is broader: hidden layers,
-comments, embedded search indexes, stale incremental-save data, unreferenced
-objects, obscured content, and specialized PDF features still require explicit
-fixtures and verification before they can be claimed as supported.
+The remaining Acrobat-class sanitization target is broader: complex optional
+content artwork rewriting, obscured content analysis, and specialized PDF
+features still require larger third-party corpora and Acrobat Pro manual
+verification before they can be claimed as fully supported.

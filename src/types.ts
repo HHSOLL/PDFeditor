@@ -1,16 +1,40 @@
 import type { PDFFont } from "pdf-lib";
 
-export type Tool = "select" | "text" | "highlight" | "rect" | "redact" | "pen";
-export type AnnotationType = Tool | "image" | "formField";
-export type EngineOperationType = AnnotationType | "flowSlice" | "deleteAnnotation" | "deleteImage";
+export type Tool = "select" | "text" | "highlight" | "rect" | "redact" | "pen" | "form";
+export type AnnotationType = Exclude<Tool, "form"> | "image" | "formField";
+export type EngineOperationType =
+  | AnnotationType
+  | "flowSlice"
+  | "deleteAnnotation"
+  | "deleteImage"
+  | "deleteVector"
+  | "cropPage"
+  | "resizePage"
+  | "redactPage"
+  | "redactSearch"
+  | "moveImage"
+  | "typedSignature"
+  | "drawnSignature"
+  | "signatureImage"
+  | "fileAttachment";
 export type SaveMode = "flatten" | "native";
 export type RedactionMode = "textOnly" | "visualArea" | "imagesAndText";
-export type FormFieldType = "text" | "checkbox" | "radio" | "combo" | "list";
+export type FormFieldType = "text" | "checkbox" | "radio" | "combo" | "list" | "signature";
 
 export interface PageItem {
   id: string;
   sourceIndex: number;
   rotation: number;
+  width?: number;
+  height?: number;
+  cropBox?: {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  };
+  sourcePdfBase64?: string;
+  password?: string;
 }
 
 export interface DocumentMetadata {
@@ -20,6 +44,7 @@ export interface DocumentMetadata {
   keywords: string;
   creator: string;
   producer: string;
+  language?: string;
 }
 
 export interface Point {
@@ -41,6 +66,7 @@ export interface AnnotationBase {
   sourceAnnotationId?: string;
   sourceAnnotationSubtype?: string;
   sourceImageId?: string;
+  sourceVectorId?: string;
   dirty?: boolean;
 }
 
@@ -77,6 +103,11 @@ export interface FormFieldAnnotation extends AnnotationBase {
   fieldValue: string;
   checked?: boolean;
   exportValue?: string;
+  defaultValue?: string;
+  required?: boolean;
+  readOnly?: boolean;
+  tabIndex?: number;
+  unsupportedReason?: string;
   options?: string[];
 }
 
@@ -211,7 +242,23 @@ export interface EngineOperation {
   fieldValue?: string;
   checked?: boolean;
   exportValue?: string;
+  defaultValue?: string;
+  required?: boolean;
+  readOnly?: boolean;
+  tabIndex?: number;
   options?: string[];
+  create?: boolean;
+  targetX?: number;
+  targetY?: number;
+  targetWidth?: number;
+  targetHeight?: number;
+  pattern?: string;
+  regex?: boolean;
+  caseSensitive?: boolean;
+  signerName?: string;
+  fileName?: string;
+  fileBase64?: string;
+  description?: string;
 }
 
 export interface EngineSourceText {
@@ -230,7 +277,20 @@ export interface EngineSourceText {
 export interface EnginePayload {
   pdfBase64: string;
   password?: string;
-  pages: Array<{ sourceIndex: number; rotation: number }>;
+  pages: Array<{
+    sourceIndex: number;
+    rotation: number;
+    width?: number;
+    height?: number;
+    cropBox?: {
+      x: number;
+      y: number;
+      width: number;
+      height: number;
+    };
+    sourcePdfBase64?: string;
+    password?: string;
+  }>;
   operations: EngineOperation[];
   sourceTexts: EngineSourceText[];
   metadata: DocumentMetadata;
@@ -243,12 +303,29 @@ export interface EnginePayload {
       metadata?: boolean;
       xmlMetadata?: boolean;
       embeddedFiles?: boolean;
+      fileAttachmentAnnotations?: boolean;
       javascript?: boolean;
+      javascriptNameTree?: boolean;
+      annotationActions?: boolean;
+      comments?: boolean;
+      hiddenLayers?: boolean;
+      embeddedSearchIndex?: boolean;
+      staleIncrementalUpdates?: boolean;
+      unreferencedObjects?: boolean;
       links?: boolean;
       thumbnails?: boolean;
       resetFormFields?: boolean;
     };
     validate: boolean;
+    encrypt?: boolean;
+    userPassword?: string;
+    ownerPassword?: string;
+    permissions?: {
+      print?: boolean;
+      copy?: boolean;
+      annotate?: boolean;
+      edit?: boolean;
+    };
   };
 }
 
@@ -265,6 +342,122 @@ export interface ExportValidation {
   annotationCount?: number;
   textLength?: number;
   pageSizes?: Array<{ width: number; height: number }>;
+  errors: string[];
+}
+
+export interface PreflightReport {
+  ok: boolean;
+  warnings: string[];
+  pageCount: number;
+  metadataPresent: boolean;
+  xmpPresent: boolean;
+  embeddedFileCount: number;
+  javascriptCount: number;
+  javascriptNameTreeCount?: number;
+  formFieldCount: number;
+  signatureFieldCount?: number;
+  xfaPresent?: boolean;
+  explicitTabOrderPageCount?: number;
+  fontCount: number;
+  hiddenLayerCount?: number;
+  commentAnnotationCount?: number;
+  fileAttachmentAnnotationCount?: number;
+  annotationActionCount?: number;
+  linkActionCount?: number;
+  embeddedSearchIndexCount?: number;
+  staleIncrementalSaveCount?: number;
+  unreferencedObjectSignalCount?: number;
+  pdfaClaim?: string;
+  pdfxClaim?: string;
+  outputIntentCount?: number;
+}
+
+export interface OcrStatus {
+  ok: boolean;
+  engine: string;
+  path: string;
+  version: string;
+  tessdata: string;
+  requestedLanguages: string[];
+  availableLanguages: string[];
+  missingLanguages: string[];
+  errors: string[];
+}
+
+export interface OcrRequest {
+  bytes: Uint8Array;
+  password?: string;
+  language?: string;
+  pages?: string;
+  dpi?: number;
+  force?: boolean;
+}
+
+export interface CertificateSignRequest {
+  bytes: Uint8Array;
+  certPem: string;
+  keyPem: string;
+  keyPassword?: string;
+  password?: string;
+  fieldName?: string;
+  signerName?: string;
+  reason?: string;
+  location?: string;
+  pageIndex?: number;
+  rect?: { x: number; y: number; width: number; height: number };
+  placeholderBytes?: number;
+  lockPolicy?: "none" | "noChanges" | "formFill" | "formFillAnnotate";
+}
+
+export interface OcrCorrection {
+  pageIndex: number;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  text: string;
+  fontSize?: number;
+}
+
+export interface OcrCorrectionRequest {
+  bytes: Uint8Array;
+  password?: string;
+  dpi?: number;
+  corrections: OcrCorrection[];
+}
+
+export interface AccessibilityAltText {
+  pageIndex?: number;
+  imageIndex?: number;
+  xref?: number;
+  altText: string;
+}
+
+export interface AccessibilityRepairRequest {
+  bytes: Uint8Array;
+  password?: string;
+  title?: string;
+  language?: string;
+  altTexts?: AccessibilityAltText[];
+}
+
+export interface SignatureValidation {
+  ok: boolean;
+  signatureCount: number;
+  signatureWidgetCount: number;
+  signedWidgetCount: number;
+  validation: ExportValidation;
+  signatures: Array<{
+    index: number;
+    ok: boolean;
+    byteRange?: number[];
+    signedByteCount?: number;
+    signatureLength?: number;
+    cmsVerified?: boolean;
+    docMDP?: boolean;
+    lockPolicy?: "none" | "noChanges" | "formFill" | "formFillAnnotate";
+    errors: string[];
+  }>;
   errors: string[];
 }
 

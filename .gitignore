@@ -1,6 +1,7 @@
 node_modules/
 dist/
 tmp/
+.venv/
 .omx/
 test-results/
 playwright-report/

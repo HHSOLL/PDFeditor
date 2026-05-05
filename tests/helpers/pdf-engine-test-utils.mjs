@@ -1,13 +1,17 @@
 import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 
 export const root = process.cwd();
 export const enginePath = path.join(root, "engine", "pdf_engine.py");
+export const enginePython = process.env.PDF_ENGINE_PYTHON ||
+  (existsSync(path.join(root, ".venv", "bin", "python")) ? path.join(root, ".venv", "bin", "python") : "python3");
 
 export function runProcess(command, args, options = {}) {
   return new Promise((resolve, reject) => {
-    const child = spawn(command, args, {
+    const resolvedCommand = command === "python3" ? enginePython : command;
+    const child = spawn(resolvedCommand, args, {
       cwd: options.cwd ?? root,
       env: { ...process.env, ...(options.env ?? {}) },
       stdio: ["ignore", "pipe", "pipe"],
@@ -23,7 +27,7 @@ export function runProcess(command, args, options = {}) {
         stderr: Buffer.concat(stderr).toString("utf8"),
       };
       if (code !== 0) {
-        reject(new Error(`${command} ${args.join(" ")} exited ${code}\n${output.stderr}`));
+        reject(new Error(`${resolvedCommand} ${args.join(" ")} exited ${code}\n${output.stderr}`));
         return;
       }
       resolve(output);

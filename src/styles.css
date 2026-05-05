@@ -705,6 +705,19 @@ button:disabled {
   font: 13px/1.2 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
 
+.signature-field-placeholder {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  height: 100%;
+  padding: 0 8px;
+  overflow: hidden;
+  color: #53616e;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .checkbox-line {
   display: inline-flex;
   align-items: center;
@@ -794,6 +807,11 @@ button:disabled {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 10px;
+}
+
+.field.two-col {
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
 }
 
 .mini-actions {

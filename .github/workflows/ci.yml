@@ -11,6 +11,7 @@ jobs:
     timeout-minutes: 20
     env:
       REQUIRE_QPDF: "1"
+      REQUIRE_OCR: "1"
       VITE_STRICT_ENGINE: "true"
 
     steps:
@@ -31,14 +32,17 @@ jobs:
       - name: Install Node dependencies
         run: npm ci
 
-      - name: Install qpdf
-        run: sudo apt-get update && sudo apt-get install -y qpdf
+      - name: Install PDF system dependencies
+        run: sudo apt-get update && sudo apt-get install -y qpdf openssl tesseract-ocr tesseract-ocr-eng tesseract-ocr-kor
 
       - name: Install Python engine dependencies
         run: python3 -m pip install -r engine/requirements.txt
 
       - name: Install Playwright browser
         run: npx playwright install --with-deps chromium
+
+      - name: Check OCR runtime
+        run: npm run ensure:ocr
 
       - name: Build
         run: npm run build
