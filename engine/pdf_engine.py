@@ -1934,6 +1934,7 @@ def qpdf_check_command(qpdf_path: str, file_path: str, password: str) -> list[st
 
 def preflight_pdf_bytes(pdf_bytes: bytes) -> dict[str, Any]:
     validation = validate_pdf_bytes(pdf_bytes)
+    standards_validation = validate_standards_with_verapdf(pdf_bytes)
     warnings: list[str] = []
     pages: list[dict[str, Any]] = []
     metadata_present = False
@@ -2050,10 +2051,20 @@ def preflight_pdf_bytes(pdf_bytes: bytes) -> dict[str, Any]:
         warnings.append("form fields present without explicit annotation tab order")
     if not validation.get("qpdfChecked"):
         warnings.append("qpdf structural check was not run")
+    if standards_validation.get("available"):
+        if standards_validation.get("validated"):
+            if not standards_validation.get("passed"):
+                profile_name = standards_validation.get("profileName") or "selected standards profile"
+                warnings.append(f"veraPDF standards validation failed for {profile_name}")
+        else:
+            warnings.append("veraPDF standards validation did not complete")
+    elif standards_validation.get("errors"):
+        warnings.extend(str(error) for error in standards_validation.get("errors", []))
 
     return {
         "ok": validation["ok"] and len(warnings) == 0,
         "validation": validation,
+        "standardsValidation": standards_validation,
         "warnings": warnings,
         "pageCount": validation["pageCount"],
         "encrypted": validation["encrypted"],
@@ -2083,6 +2094,135 @@ def preflight_pdf_bytes(pdf_bytes: bytes) -> dict[str, Any]:
     }
 
 
+def validate_standards_with_verapdf(pdf_bytes: bytes) -> dict[str, Any]:
+    verapdf_path = os.environ.get("VERAPDF_BIN") or shutil.which("verapdf")
+    result: dict[str, Any] = {
+        "available": bool(verapdf_path),
+        "validator": "verapdf",
+        "validatorPath": verapdf_path or "",
+        "validatorVersion": "",
+        "validated": False,
+        "passed": False,
+        "compliant": False,
+        "profileName": "",
+        "statement": "",
+        "exitCode": None,
+        "passedRules": 0,
+        "failedRules": 0,
+        "passedChecks": 0,
+        "failedChecks": 0,
+        "failures": [],
+        "errors": [],
+    }
+    if not verapdf_path:
+        if os.environ.get("REQUIRE_STANDARDS_VALIDATOR", "").lower() in {"1", "true", "yes"}:
+            result["errors"].append("veraPDF is required for this preflight run but was not found on PATH")
+        return result
+
+    with tempfile.NamedTemporaryFile(suffix=".pdf") as handle:
+        handle.write(pdf_bytes)
+        handle.flush()
+        try:
+            completed = subprocess.run(
+                [
+                    verapdf_path,
+                    "--format",
+                    "json",
+                    "--flavour",
+                    "0",
+                    "--maxfailuresdisplayed",
+                    "10",
+                    handle.name,
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
+        except subprocess.TimeoutExpired:
+            result["errors"].append("veraPDF validation timed out")
+            return result
+        except Exception as exc:  # noqa: BLE001 - preflight must stay diagnostic
+            result["errors"].append(f"veraPDF validation failed to run: {exc}")
+            return result
+
+    result["exitCode"] = completed.returncode
+    if completed.stderr.strip():
+        result["errors"].append(completed.stderr.strip())
+    if not completed.stdout.strip():
+        result["errors"].append("veraPDF returned no JSON report")
+        return result
+
+    try:
+        report = json.loads(completed.stdout)
+    except json.JSONDecodeError as exc:
+        result["errors"].append(f"veraPDF returned invalid JSON: {exc}")
+        return result
+
+    release_details = (
+        report.get("report", {})
+        .get("buildInformation", {})
+        .get("releaseDetails", [])
+    )
+    if isinstance(release_details, list):
+        versions = [
+            str(detail.get("version", ""))
+            for detail in release_details
+            if isinstance(detail, dict) and detail.get("id") in {"apps", "core"}
+        ]
+        result["validatorVersion"] = next((version for version in versions if version), "")
+
+    jobs = report.get("report", {}).get("jobs", [])
+    if not isinstance(jobs, list) or not jobs:
+        result["errors"].append("veraPDF report did not contain a validation job")
+        return result
+    validation_results = jobs[0].get("validationResult", []) if isinstance(jobs[0], dict) else []
+    if not isinstance(validation_results, list) or not validation_results:
+        result["errors"].append("veraPDF report did not contain validationResult")
+        return result
+
+    validation_result = validation_results[0]
+    if not isinstance(validation_result, dict):
+        result["errors"].append("veraPDF validationResult had an unexpected shape")
+        return result
+
+    details = validation_result.get("details", {})
+    result["validated"] = validation_result.get("jobEndStatus") == "normal"
+    result["compliant"] = bool(validation_result.get("compliant"))
+    result["passed"] = bool(validation_result.get("compliant")) and result["validated"]
+    result["profileName"] = str(validation_result.get("profileName") or "")
+    result["statement"] = str(validation_result.get("statement") or "")
+    if isinstance(details, dict):
+        result["passedRules"] = int(details.get("passedRules") or 0)
+        result["failedRules"] = int(details.get("failedRules") or 0)
+        result["passedChecks"] = int(details.get("passedChecks") or 0)
+        result["failedChecks"] = int(details.get("failedChecks") or 0)
+        summaries = details.get("ruleSummaries", [])
+        if isinstance(summaries, list):
+            result["failures"] = [summarize_verapdf_failure(summary) for summary in summaries[:10]]
+
+    if completed.returncode not in {0, 1}:
+        result["errors"].append(f"veraPDF exited with unexpected code {completed.returncode}")
+    return result
+
+
+def summarize_verapdf_failure(summary: Any) -> dict[str, Any]:
+    if not isinstance(summary, dict):
+        return {"description": str(summary)}
+    checks = summary.get("checks", [])
+    first_check = checks[0] if isinstance(checks, list) and checks and isinstance(checks[0], dict) else {}
+    return {
+        "specification": str(summary.get("specification") or ""),
+        "clause": str(summary.get("clause") or ""),
+        "testNumber": summary.get("testNumber"),
+        "description": str(summary.get("description") or ""),
+        "object": str(summary.get("object") or ""),
+        "failedChecks": int(summary.get("failedChecks") or 0),
+        "context": str(first_check.get("context") or ""),
+        "errorMessage": str(first_check.get("errorMessage") or ""),
+    }
+
+
 def write_preflight_report_pdf(result: dict[str, Any], output_path: Path) -> None:
     output_path.parent.mkdir(parents=True, exist_ok=True)
     document = fitz.open()
@@ -2096,9 +2236,24 @@ def write_preflight_report_pdf(result: dict[str, Any], output_path: Path) -> Non
         f"Hidden layers: {result.get('hiddenLayerCount', 0)}",
         f"JavaScript objects: {result.get('javascriptCount', 0)}",
         f"Embedded files: {result.get('embeddedFileCount', 0)}",
-        "",
-        "Warnings:",
     ]
+    standards = result.get("standardsValidation", {})
+    if isinstance(standards, dict):
+        lines.extend(
+            [
+                f"veraPDF: {'available' if standards.get('available') else 'not available'}",
+                f"veraPDF profile: {standards.get('profileName') or 'n/a'}",
+                f"veraPDF compliant: {standards.get('passed')}",
+                f"veraPDF failed checks: {standards.get('failedChecks', 0)}",
+            ]
+        )
+        failures = standards.get("failures", [])
+        if isinstance(failures, list) and failures:
+            lines.append(f"veraPDF first failure: {failures[0].get('description', '')}")
+            first_error = failures[0].get("errorMessage", "")
+            if first_error:
+                lines.append(f"veraPDF first error: {first_error}")
+    lines.extend(["", "Warnings:"])
     warnings = result.get("warnings", [])
     if isinstance(warnings, list) and warnings:
         lines.extend(f"- {warning}" for warning in warnings[:30])

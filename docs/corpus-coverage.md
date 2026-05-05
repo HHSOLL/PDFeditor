@@ -48,7 +48,7 @@ REQUIRE_QPDF=1 node tests/engine-corpus-100.mjs
 | Signatures/security | `tests/engine-digital-signature.mjs`, `tests/engine-signature-simple.mjs`, `tests/engine-password-permissions.mjs` |
 | OCR | `tests/engine-ocr-searchable.mjs`, `tests/engine-ocr-korean-correction.mjs` |
 | Accessibility | `tests/engine-accessibility-report.mjs`, `tests/engine-accessibility-repair.mjs` |
-| Preflight/compare/batch | `tests/engine-preflight-report.mjs`, `tests/engine-preflight-standards-signals.mjs`, `tests/engine-compare.mjs`, `tests/engine-batch-action.mjs`, `tests/engine-batch-100.mjs` |
+| Preflight/compare/batch | `tests/engine-preflight-report.mjs`, `tests/engine-preflight-standards-signals.mjs`, `tests/engine-standards-validator.mjs`, `tests/engine-compare.mjs`, `tests/engine-batch-action.mjs`, `tests/engine-batch-100.mjs` |
 | Product UI and packaging | compare/batch/image-move cases in `tests/pdf-editor.spec.ts`, `tests/release-smoke.mjs`, `tests/package-smoke.mjs` |
 
 ## External Real-World Corpus Manifest

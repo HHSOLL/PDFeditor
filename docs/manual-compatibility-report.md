@@ -14,6 +14,9 @@ tests are necessary but not sufficient.
 - Google Chrome: `147.0.7727.138` detected locally
 - Microsoft Edge: `147.0.3912.98` detected locally
 - Structural validator: `qpdf` required for local verification
+- Standards validator: `veraPDF` can be required with
+  `REQUIRE_STANDARDS_VALIDATOR=1 npm run test:standards-validator`; this is
+  automated PDF/A/PDF/UA report evidence, not Acrobat Pro Preflight smoke.
 - OCR runtime: `tesseract` required for local OCR verification
 
 ## Automated External-Viewer Proxies Completed
@@ -27,6 +30,7 @@ are real PDF structure and pass the local validators used before manual opening.
 | `tmp/exported-sign-ui.pdf` | Certificate signing UI | `pdf_engine.py signature-validate` returned `ok: true`, `signatureCount: 1`, `signedWidgetCount: 1`, `cmsVerified: true`, `docMDP: true` | Pass |
 | `tmp/exported-accessibility-ui.pdf` | Accessibility repair UI | `pdf_engine.py accessibility` returned `ok: true`, title `Accessible UI Smoke`, language `ko-KR`, `tagged: true`, `imageAltTextCount: 1` | Pass |
 | `tmp/engine-preflight-report/preflight-report.pdf` | Preflight report PDF | Engine test generated and validates the report PDF | Pass |
+| `tmp/engine-standards-validator/standards-validator-report.pdf` | veraPDF standards report PDF | `engine-standards-validator.mjs` validates qpdf/PyMuPDF output and records veraPDF profile/failure details when the validator is installed | Pass |
 | `tmp/engine-compare/compare-report.pdf` | Compare report PDF | Engine test generated and validates the report PDF | Pass |
 | `tmp/exported-compare-report-ui.pdf` | Inspector compare UI | Playwright saved report PDF and extracted `PDF Compare Report` plus before/after text | Pass |
 | document overlay | Inspector compare UI | Playwright verified changed-region overlay visibility, overlay toggle removal, and first-change command availability | Pass |

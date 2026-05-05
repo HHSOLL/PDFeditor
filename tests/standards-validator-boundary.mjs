@@ -11,12 +11,13 @@ const releaseBoundary = await fs.readFile(releaseBoundaryPath, "utf8");
 const score = await fs.readFile(scorePath, "utf8");
 
 for (const phrase of [
-  "Current status: **report-only**",
+  "Current status: **validator-backed report-only**",
   "PDF/A-certified output",
   "PDF/X-certified output",
   "PDF/UA-compliant editor",
   "Preflight fixups",
   "verapdf",
+  "standardsValidation",
 ]) {
   if (!evaluation.includes(phrase)) {
     throw new Error(`validator evaluation must include boundary phrase: ${phrase}`);
@@ -30,14 +31,13 @@ for (const forbidden of ["Full PDF/A or PDF/X certification", "Full PDF/UA edito
 }
 
 if (!score.includes("Report-only preflight UI/report PDF")) {
-  throw new Error("replacement score must keep preflight report-only wording");
+  throw new Error("replacement score must keep preflight report-only wording until score evidence is updated");
 }
 
 console.log(
   JSON.stringify({
     ok: true,
-    validatorBoundary: "report-only until veraPDF/professional validator is integrated",
+    validatorBoundary: "veraPDF report path integrated; certification/fixup claims remain blocked",
     evaluationPath,
   }),
 );
-

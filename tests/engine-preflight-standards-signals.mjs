@@ -26,6 +26,12 @@ if (report.pdfaClaim !== "PDF/A-2U") {
 if (!report.warnings.includes("PDF/A claim is present without an OutputIntent signal")) {
   throw new Error(`PDF/A missing OutputIntent warning was not emitted: ${JSON.stringify(report.warnings)}`);
 }
+if (report.standardsValidation?.profileName !== "PDF/A-2u validation profile") {
+  throw new Error(`veraPDF did not auto-select the claimed PDF/A-2u profile: ${JSON.stringify(report.standardsValidation)}`);
+}
+if (report.standardsValidation?.passed !== false || report.standardsValidation.failedChecks < 1) {
+  throw new Error(`veraPDF should reject the intentionally incomplete PDF/A fixture: ${JSON.stringify(report.standardsValidation)}`);
+}
 
 async function createStandardsFixture(filePath) {
   await runProcess("python3", [

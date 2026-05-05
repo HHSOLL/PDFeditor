@@ -76,10 +76,13 @@ compatibility.
 - Sanitizer changes must prove removed secrets are absent from raw PDF bytes.
 - Preflight changes must include both positive and cleaned-document assertions.
 - qpdf validation remains mandatory after sanitization.
-- Preflight is report-only. Do not claim automatic preflight fixups.
+- Preflight is validator-backed report-only when veraPDF is available. Do not
+  claim automatic preflight fixups.
+- `REQUIRE_STANDARDS_VALIDATOR=1 npm run test:standards-validator` must pass
+  before claiming PDF/A/PDF/UA validation report support.
 - Do not claim PDF/A, PDF/X, accessibility, or professional preflight
-  certification until veraPDF or a professional SDK is integrated and checked
-  against dedicated fixtures.
+  certification until a validator/professional SDK has passing and failing
+  dedicated fixtures plus manual Acrobat Pro Preflight comparison records.
 
 ## Current 80+ Point Gate
 
@@ -97,6 +100,7 @@ REQUIRE_QPDF=1 node tests/engine-image-move.mjs
 REQUIRE_QPDF=1 node tests/engine-compare.mjs
 REQUIRE_QPDF=1 node tests/engine-preflight-report.mjs
 REQUIRE_QPDF=1 node tests/engine-preflight-standards-signals.mjs
+REQUIRE_QPDF=1 REQUIRE_STANDARDS_VALIDATOR=1 node tests/engine-standards-validator.mjs
 REQUIRE_QPDF=1 node tests/engine-accessibility-report.mjs
 REQUIRE_QPDF=1 node tests/engine-accessibility-repair.mjs
 REQUIRE_QPDF=1 node tests/engine-vector-object-edit.mjs

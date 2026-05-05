@@ -32,7 +32,9 @@ Safe current wording remains:
 - Do not count screenshot/raster export as PDF editing.
 - Do not claim Acrobat/Preview/Chrome/Edge compatibility without app-specific
   manual records in `docs/manual-compatibility-report.md`.
-- Do not claim PDF/A, PDF/X, or PDF/UA certification without a validator path.
+- Do not claim PDF/A, PDF/X, or PDF/UA certification without validator-backed
+  passing/failing fixtures and Acrobat comparison evidence. veraPDF report
+  output is validation evidence, not certified-output evidence.
 - Do not claim enterprise signature support without timestamp/LTV and trust-chain
   UX.
 
@@ -51,7 +53,7 @@ Safe current wording remains:
 | 9 | Signature trust, timestamp, LTV | `engine/pdf_engine.py`, `src/main.ts`, `tests/engine-digital-signature*.mjs` | timestamp/trust boundary/password tests | Acrobat signature panel | Yes | Yes | No | Acrobat recognizes signature status; tamper invalidates | Partial; timestamp/LTV missing |
 | 10 | OCR scanned editing completeness | `engine/pdf_engine.py`, `src/main.ts`, `tests/engine-ocr*.mjs` | deskew/orientation/correction UI tests | Acrobat/Preview/Chrome search | Yes | Yes | Optional queue | corrected invisible text layer extractable | Partial |
 | 11 | Full sanitizer claim | `engine/pdf_engine.py`, `tests/engine-sanitizer*.mjs` | RichMedia/OCG/obscured/xref tests | Acrobat Pro sanitizer comparison | Existing | Yes | No | no secrets in text/raw/xref/unreferenced scans | Partial; full claim blocked |
-| 12 | PDF/A/X validator-backed preflight | `engine/pdf_engine.py`, `docs/pdfa-pdfx-engine-evaluation.md`, `tests/engine-preflight*.mjs` | veraPDF/pro SDK validation tests | Acrobat Preflight comparison | Existing | Validator needed | No | validator-backed report/fixups | Report-only |
+| 12 | PDF/A/UA validator-backed preflight | `engine/pdf_engine.py`, `docs/pdfa-pdfx-engine-evaluation.md`, `tests/engine-preflight*.mjs` | `engine-standards-validator.mjs` with veraPDF | Acrobat Preflight comparison | Existing | PDF/X validator/fixup engine still needed | No | validator-backed report/fixups | PDF/A/UA report path implemented; fixups/PDF/X blocked |
 | 13 | PDF/UA accessibility workflow | `engine/pdf_engine.py`, `src/main.ts`, `tests/engine-accessibility*.mjs` | tag tree/reading order/PDF-UA report tests | Acrobat accessibility panel | Yes | Validator needed | No | tagged PDF save and validator report | Basic only |
 | 14 | Compare/batch full workflow | `src/main.ts`, `server/pdf-engine-server.mjs`, `tests/engine-batch*.mjs` | compare object/annotation diff, batch worker tests | Report PDF visual smoke | Yes | Yes | Worker needed | action builder, logs, failure report | Partial |
 | 15 | Production or desktop packaging | `scripts/package-local.mjs`, `server/pdf-engine-server.mjs`, `docs/deployment.md` | package/deployment/job/storage smoke | User launch smoke | Yes | Lifecycle automation | Yes | dev-server-free execution with logs/recovery | Local web package has launcher, manifest, logs, support bundle; native/hosted release still blocked |
@@ -64,8 +66,8 @@ Safe current wording remains:
    vector, text edit, and page organization outputs.
 2. Acquire or reproducibly generate the external corpus entries described in
    `tests/corpus/manifest.json`.
-3. Add professional validator paths for PDF/A, PDF/X, and PDF/UA before changing
-   certification language.
+3. Extend the implemented veraPDF report path with PDF/X-capable validation and
+   professional fixup evidence before changing certification language.
 4. Build a managed desktop or production web package with engine lifecycle,
    logs, and failure recovery.
 5. Expand object editing, semantic reflow, annotations, forms, sanitizer, OCR,
@@ -97,10 +99,11 @@ Safe current wording remains:
   real vector box at the edited bbox, so moving detected vector objects is no
   longer overlay-only. Exact source path preservation and full stroke/fill UI
   remain blocked.
-- `docs/pdfa-pdfx-engine-evaluation.md` records the validator path and
+- `docs/pdfa-pdfx-engine-evaluation.md` records the validator path.
   `tests/standards-validator-boundary.mjs` keeps PDF/A, PDF/X, PDF/UA, and
-  preflight fixup claims blocked until veraPDF or a professional SDK is wired
-  into the engine.
+  preflight fixup claims blocked unless validator-backed report evidence exists.
+  `tests/engine-standards-validator.mjs` now proves the veraPDF JSON report path
+  and missing-validator failure policy.
 
 ## Non-Claimable Boundaries
 

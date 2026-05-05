@@ -351,6 +351,7 @@ export interface PreflightReport {
   ok: boolean;
   warnings: string[];
   pageCount: number;
+  standardsValidation?: StandardsValidationReport;
   metadataPresent: boolean;
   xmpPresent: boolean;
   embeddedFileCount: number;
@@ -372,6 +373,36 @@ export interface PreflightReport {
   pdfaClaim?: string;
   pdfxClaim?: string;
   outputIntentCount?: number;
+}
+
+export interface StandardsValidationFailure {
+  specification: string;
+  clause: string;
+  testNumber?: number;
+  description: string;
+  object: string;
+  failedChecks: number;
+  context: string;
+  errorMessage: string;
+}
+
+export interface StandardsValidationReport {
+  available: boolean;
+  validator: string;
+  validatorPath: string;
+  validatorVersion: string;
+  validated: boolean;
+  passed: boolean;
+  compliant: boolean;
+  profileName: string;
+  statement: string;
+  exitCode: number | null;
+  passedRules: number;
+  failedRules: number;
+  passedChecks: number;
+  failedChecks: number;
+  failures: StandardsValidationFailure[];
+  errors: string[];
 }
 
 export interface OcrStatus {

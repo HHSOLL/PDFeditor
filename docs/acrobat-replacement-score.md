@@ -48,7 +48,7 @@ managed production package, and non-report-only professional validation engines.
 | Signatures / security | 8 | 7 | Inspector certificate signing UI, CMS ByteRange signing, signature validation, DocMDP lock policy, password permissions | Acrobat signature panel smoke, timestamp/LTV, trust-store UX |
 | Redaction / full sanitizer | 8 | 5 | Real redaction policies, hidden-info sanitizer engine fixtures | Third-party hidden-data corpus and Acrobat Pro sanitizer comparison |
 | OCR / scanned PDF editing | 7 | 6 | Inspector OCR status/run/correction UI, searchable image-over-text PDF, Korean OCR engine fixture | OCR correction selection UI, deskew/orientation, manual viewer smoke |
-| Preflight / PDF/A/X / print production | 5 | 3 | Report-only preflight UI/report PDF, PDF/A/X signal detection | veraPDF/pro SDK validation and Acrobat Preflight comparison |
+| Preflight / PDF/A/X / print production | 5 | 3 | Report-only preflight UI/report PDF, PDF/A/X signal detection, and veraPDF-backed PDF/A/PDF/UA validation output when `npm run test:standards-validator` passes | PDF/X-capable validator/pro SDK, fixups, and Acrobat Preflight comparison |
 | Accessibility / PDF/UA | 4 | 2 | Inspector accessibility repair UI, title/language/tag signal/image alt text engine report | Real tag-tree editor, reading order, PDF/UA validator |
 | Compare / batch automation | 4 | 4 | Inspector compare target selection, changed-region overlay with first-change navigation, compare report PDF download, reusable batch preset, batch watermark/search-redaction/sanitizer quick action, production-server compare/batch smoke, 100-job runner | Queue/worker execution, full multi-step action builder, annotation/object diff |
 | Deployment / productization / supportability | 5 | 2 | Build output served by the product engine server, release smoke for health/UI/OCR/compare/batch, and smoke-tested local release package with launcher | Native desktop or managed web deployment with engine lifecycle/logging |
@@ -94,8 +94,9 @@ The shortest path from the current verified 82 to a claimable 90 is:
 2. Attach actual files or reproducible acquisition/generation steps to the
    117-entry external corpus manifest in `tests/corpus/manifest.json`, then
    connect representative entries to manual smoke results.
-3. Replace report-only PDF/A/X checks with veraPDF or a professional SDK path,
-   while keeping fixups unclaimed until verified.
+3. Extend the new veraPDF-backed PDF/A/PDF/UA report path with a PDF/X-capable
+   validator or professional SDK path, while keeping fixups unclaimed until
+   verified.
 4. Ship either a native desktop build or a managed production web deployment with
    engine lifecycle management, logs, and failure recovery.
 5. Add image crop/rotate/resize UI polish, vector move/color/stroke editing,

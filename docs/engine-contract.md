@@ -262,6 +262,7 @@ is the CLI form for encrypted output validation.
 `/api/pdf/preflight` and `pdf_engine.py preflight` return a JSON object with:
 
 - `validation`
+- `standardsValidation`
 - `warnings`
 - `pageCount`
 - `metadata`
@@ -289,8 +290,13 @@ is the CLI form for encrypted output validation.
 - `pages`
 
 Each page entry includes page boxes, image/drawing/annotation/widget counts,
-and font names. PDF/A/PDF/X fields are claim and output-intent diagnostics only;
-this is a basic product preflight, not a PDF/A or PDF/X certification engine.
+and font names. `standardsValidation` is populated by veraPDF when it is
+available on `PATH` or through `VERAPDF_BIN`; it reports validator version,
+profile name, pass/fail status, failed check counts, and summarized failures.
+When `REQUIRE_STANDARDS_VALIDATOR=1`, missing veraPDF is a preflight blocker.
+PDF/A/PDF/UA validator output is report evidence, not a claim that PDFeditor can
+create certified output. PDF/X remains signal-only until a PDF/X-capable
+validator or professional SDK is added.
 
 `pdf_engine.py preflight --input file.pdf --report report.pdf` writes a
 human-readable report PDF that mirrors the JSON warnings and metrics.

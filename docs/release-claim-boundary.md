@@ -17,7 +17,8 @@ being confused with a fully verified Acrobat Pro replacement claim.
   order, and image alt text.
 - AcroForm filling/creation support for text, checkbox, radio, combo, list, and
   signature-field widgets.
-- Report-only preflight with PDF/A/X signal diagnostics.
+- Validator-backed report-only preflight with veraPDF PDF/A/PDF/UA validation
+  output when installed, plus PDF/X signal diagnostics.
 - Hidden-info sanitizer coverage for generated fixtures.
 - Inspector compare report download and batch quick action backed by the engine,
   changed-region compare overlay and first-change navigation, persisted batch
@@ -61,10 +62,10 @@ being confused with a fully verified Acrobat Pro replacement claim.
 - **Deployment:** the app has a smoke-tested local web release package. There is
   no native desktop app, hosted production deployment, queue, auth, audit log, or
   managed engine lifecycle.
-- **Preflight:** the current engine reports signals. It does not certify PDF/A/X
-  conformance and does not apply fixups. The validator evaluation is tracked in
-  `docs/pdfa-pdfx-engine-evaluation.md`; claims stay blocked until veraPDF or a
-  professional SDK path is integrated and tested.
+- **Preflight:** the current engine reports local signals and can include
+  veraPDF PDF/A/PDF/UA validation output. It does not certify that PDFeditor can
+  create PDF/A/X/UA-compliant output and does not apply fixups. PDF/X remains
+  signal-only until a PDF/X-capable validator or professional SDK path is added.
 - **Digital signatures:** CMS ByteRange signing and tamper detection work.
   Timestamp, LTV, revocation, and enterprise trust-chain UX are not included.
 - **OCR:** OCR can produce searchable PDFs and write corrected text. Full

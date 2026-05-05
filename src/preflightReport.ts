@@ -34,6 +34,24 @@ export function validationPreflightFallback(validation: ExportValidation): Prefl
     pdfaClaim: "",
     pdfxClaim: "",
     outputIntentCount: 0,
+    standardsValidation: {
+      available: false,
+      validator: "verapdf",
+      validatorPath: "",
+      validatorVersion: "",
+      validated: false,
+      passed: false,
+      compliant: false,
+      profileName: "",
+      statement: "",
+      exitCode: null,
+      passedRules: 0,
+      failedRules: 0,
+      passedChecks: 0,
+      failedChecks: 0,
+      failures: [],
+      errors: ["preflight engine unavailable; standards validator was not run"],
+    },
   };
 }
 
@@ -54,6 +72,9 @@ export function summarizePreflightReport(report: PreflightReport) {
     report.pdfaClaim ? `${report.pdfaClaim} claim` : "",
     report.pdfxClaim ? `${report.pdfxClaim} claim` : "",
     report.outputIntentCount ? `${report.outputIntentCount} output intent` : "",
+    report.standardsValidation?.available
+      ? `veraPDF ${report.standardsValidation.passed ? "pass" : "fail"} (${report.standardsValidation.profileName || "auto"})`
+      : "veraPDF not available",
   ].filter(Boolean);
 
   return {
