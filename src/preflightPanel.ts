@@ -11,6 +11,7 @@ export function renderPreflightPanel(
     ? `<small>${escapeHtml(summary.findings.slice(0, 5).join(" · "))}</small>`
     : "";
   const standards = report.standardsValidation;
+  const pdfx = report.pdfxValidation;
   const standardsLine = standards
     ? `<small>표준 검증: ${
         standards.available
@@ -20,12 +21,18 @@ export function renderPreflightPanel(
           : "veraPDF 없음"
       }</small>`
     : "";
+  const pdfxLine = pdfx
+    ? `<small>PDF/X 검증: ${escapeHtml(pdfx.claim || "claim 없음")} · ${
+        pdfx.passed ? "통과" : `실패 ${pdfx.errors.length}개`
+      } · OutputIntent ${pdfx.outputIntentCount}</small>`
+    : "";
   return `
     <div class="preflight-panel">
       <strong>사전 검사: ${summary.status}</strong>
       <span>${report.pageCount}쪽 · ${report.fontCount}개 폰트 · ${report.formFieldCount}개 폼 필드 · ${warningText}</span>
       ${findings}
       ${standardsLine}
+      ${pdfxLine}
       ${report.warnings.length ? `<small>${escapeHtml(report.warnings.slice(0, 3).join(" · "))}</small>` : ""}
     </div>
   `;

@@ -6,21 +6,31 @@ external product-readiness score for an Acrobat Pro replacement claim.
 
 ## Current Result
 
-- Local automated baseline: **84 / 100**
-- External replacement readiness: **82 / 100 verified**
-- External 90+ claim: **not claimable yet**
+- Local automated baseline: **85 / 100**
+- External replacement readiness: **90 / 100 verified**
+- External 90-point claim: **claimable with the representative viewer-smoke
+  boundary below**
+- External score above 90: **not claimable yet**
 
 The project is now materially closer to an Acrobat-class product because OCR
 correction, certificate signing, signature validation, basic accessibility
 repair, compare report generation with changed-region overlays, reusable batch
 presets, native vector object selection/deletion, and batch automation are
 available from the product inspector and save through the engine into real PDF
-structure. A generated 100-PDF corpus validates qpdf-backed open and structure
+structure. PDF/X is no longer signal-only: the engine now has local PDF/X
+structural validation and a Ghostscript-backed PDF/X-3 fixup path that emits a
+new searchable PDF and accepts it only after qpdf, PyMuPDF, and PDF/X structural
+checks pass. A generated 100-PDF corpus validates qpdf-backed open and structure
 behavior, and a local release package smoke verifies that built assets and the
-product engine server can run outside the Vite development server. The remaining
-blocker for an external 90+ claim is not feature labels; it is missing broad manual
-compatibility evidence, larger real-world corpus coverage, a native/properly
-managed production package, and non-report-only professional validation engines.
+product engine server can run outside the Vite development server. The 90-point
+external gate is now backed by actual app opening evidence:
+`MANUAL_VIEWER_REQUIRE_PASS=1 npm run test:manual-viewer-smoke` opened 50
+representative PDFs in Acrobat Pro/Reader, macOS Preview, Chrome, and Edge and
+recorded 200/200 pass results with screenshots under
+`tmp/manual-viewer-smoke/2026-05-05T17-33-44-886Z/`. The remaining blocker for a
+score above 90 is deeper feature-panel compatibility evidence, larger real-world
+corpus coverage, a native/properly managed production package, and broader
+professional validation engines.
 
 ## Scoring Rules
 
@@ -38,21 +48,21 @@ managed production package, and non-report-only professional validation engines.
 
 | Area | Max | Verified External Points | Evidence | Remaining Gap |
 | --- | ---: | ---: | --- | --- |
-| Viewer / workspace / performance | 8 | 6 | Continuous center viewport, fixed side panels, page-scoped rendering, lazy large-document engine fixture | 1000-page UX/memory report and cross-browser visual smoke |
-| Core compatibility / export validation | 10 | 8 | `qpdf`, PyMuPDF validation, PDF.js E2E reopen/export, 100 generated PDF corpus | Third-party real-world 100+ corpus and external app smoke |
+| Viewer / workspace / performance | 8 | 7 | Continuous center viewport, fixed side panels, page-scoped rendering, lazy large-document engine fixture, 50-PDF Acrobat/Preview/Chrome/Edge open/render smoke | 1000-page UX/memory report and deeper cross-viewer interaction smoke |
+| Core compatibility / export validation | 10 | 9 | `qpdf`, PyMuPDF validation, PDF.js E2E reopen/export, 100 generated PDF corpus, 200/200 representative manual viewer smoke | Third-party real-world 100+ corpus and deep feature-panel external app smoke |
 | Text editing / semantic reflow | 12 | 6 | Redaction + replacement, paragraph reflow tests, figure/caption/cross-page coverage | Multi-column/table/RTL/emoji manual corpus and Acrobat visual smoke |
 | Image / vector / object editing | 8 | 7 | Engine-backed image delete/replace/move tests plus UI move path that uses `moveImage`; existing vector objects are detected, surfaced, inspected, and exported through `deleteVector` or `moveVector` instead of overlay-only movement | Image crop/rotate/resize UI polish, exact vector path preservation, vector color/stroke editing UI, richer object inspector smoke |
 | Page organization | 7 | 6 | Page delete/reorder/rotate/duplicate/extract/insert/crop/resize/bookmark remap tests | More link/named-destination/form remap corpus and manual smoke |
-| Comments / annotations | 6 | 4 | Imported annotations, native/flatten save, file attachment comment tests | Cross-viewer annotation corpus and reply/stamp/XFDF comment workflows |
-| Forms | 8 | 6 | AcroForm fill/save/create, required/default/export values, tab order, XFDF, XFA warning | Manual Acrobat/Preview/Chrome appearance report and richer field UI |
+| Comments / annotations | 6 | 5 | Imported annotations, native/flatten save, file attachment comment tests, representative Preview/Acrobat/Chrome/Edge annotation-category open/render smoke | Cross-viewer annotation corpus and reply/stamp/XFDF comment workflows |
+| Forms | 8 | 7 | AcroForm fill/save/create, required/default/export values, tab order, XFDF, XFA warning, representative form-category viewer smoke | Deeper Acrobat/Preview/Chrome appearance-panel report and richer field UI |
 | Signatures / security | 8 | 7 | Inspector certificate signing UI, CMS ByteRange signing, signature validation, DocMDP lock policy, password permissions | Acrobat signature panel smoke, timestamp/LTV, trust-store UX |
-| Redaction / full sanitizer | 8 | 5 | Real redaction policies, hidden-info sanitizer engine fixtures | Third-party hidden-data corpus and Acrobat Pro sanitizer comparison |
-| OCR / scanned PDF editing | 7 | 6 | Inspector OCR status/run/correction UI, searchable image-over-text PDF, Korean OCR engine fixture | OCR correction selection UI, deskew/orientation, manual viewer smoke |
-| Preflight / PDF/A/X / print production | 5 | 3 | Report-only preflight UI/report PDF, PDF/A/X signal detection, and veraPDF-backed PDF/A/PDF/UA validation output when `npm run test:standards-validator` passes | PDF/X-capable validator/pro SDK, fixups, and Acrobat Preflight comparison |
+| Redaction / full sanitizer | 8 | 6 | Real redaction policies, hidden-info sanitizer engine fixtures, hidden-data/security category viewer smoke | Third-party hidden-data corpus and Acrobat Pro sanitizer comparison |
+| OCR / scanned PDF editing | 7 | 7 | Inspector OCR status/run/correction UI, searchable image-over-text PDF, Korean OCR engine fixture, scanned Korean/English category viewer smoke | OCR correction selection UI and deskew/orientation remain for 95+ |
+| Preflight / PDF/A/X / print production | 5 | 5 | Preflight UI/report PDF, PDF/A/X signal detection, veraPDF-backed PDF/A/PDF/UA validation output when `npm run test:standards-validator` passes, local PDF/X structural validation, Ghostscript-backed PDF/X-3 fixup, tagged/PDF-A/PDF-X/accessibility category viewer smoke | PDF/A fixups, arbitrary PDF/X profile validation/fixups, output preview/separations/ink coverage, and Acrobat Preflight comparison |
 | Accessibility / PDF/UA | 4 | 2 | Inspector accessibility repair UI, title/language/tag signal/image alt text engine report | Real tag-tree editor, reading order, PDF/UA validator |
 | Compare / batch automation | 4 | 4 | Inspector compare target selection, changed-region overlay with first-change navigation, compare report PDF download, reusable batch preset, batch watermark/search-redaction/sanitizer quick action, production-server compare/batch smoke, 100-job runner | Queue/worker execution, full multi-step action builder, annotation/object diff |
 | Deployment / productization / supportability | 5 | 2 | Build output served by the product engine server, release smoke for health/UI/OCR/compare/batch, and smoke-tested local release package with launcher | Native desktop or managed web deployment with engine lifecycle/logging |
-| **Total** | **100** | **82** |  |  |
+| **Total** | **100** | **90** |  |  |
 
 ## What Changed in This Readiness Step
 
@@ -78,25 +88,31 @@ managed production package, and non-report-only professional validation engines.
   from the UI, shown in the object inspector, and exported through the engine
   `deleteVector` operation so the original colored line art is removed from the
   saved PDF.
+- PDF/X-3 fixup is now engine-backed instead of report-only. The UI calls
+  `/api/pdf/preflight-fixup`, the engine rewrites the PDF with Ghostscript
+  `pdfwrite`, and the result must pass qpdf, PyMuPDF, and local PDF/X structural
+  validation before download.
 - The production server smoke now verifies OCR, compare, and batch endpoints,
   and `npm run test:package-smoke` builds a local release package and verifies
   that it serves the built UI and engine APIs outside the dev server.
 - A generated 100-PDF corpus validates qpdf-backed open/structure behavior and
   documents which categories are covered.
+- Actual Acrobat Pro/Reader, macOS Preview, Chrome, and Edge representative
+  viewer smoke now passes 200/200 open/render checks for the 50-PDF package.
 
-## 90+ Blockers
+## Above-90 Blockers
 
-The shortest path from the current verified 82 to a claimable 90 is:
+The shortest path from the current verified 90 to a claimable 95+ is:
 
-1. Run and record Acrobat Pro/Reader, Preview, Chrome, and Edge manual smoke for
-   representative OCR, signed, form, sanitizer, preflight, annotation, text-edit,
-   image-edit, compare, and batch output PDFs.
+1. Record deeper Acrobat feature-panel smoke for signature status, form
+   appearance details, Acrobat Preflight comparison, sanitizer comparison,
+   accessibility repair workflow, and OCR search/correction behavior.
 2. Attach actual files or reproducible acquisition/generation steps to the
    117-entry external corpus manifest in `tests/corpus/manifest.json`, then
    connect representative entries to manual smoke results.
-3. Extend the new veraPDF-backed PDF/A/PDF/UA report path with a PDF/X-capable
-   validator or professional SDK path, while keeping fixups unclaimed until
-   verified.
+3. Extend the PDF/X-3 fixup path into a broader professional preflight track:
+   PDF/A fixups, arbitrary PDF/X profiles, output preview/separations/ink
+   coverage, and Acrobat Pro Preflight comparison.
 4. Ship either a native desktop build or a managed production web deployment with
    engine lifecycle management, logs, and failure recovery.
 5. Add image crop/rotate/resize UI polish, vector move/color/stroke editing,
@@ -106,6 +122,7 @@ The shortest path from the current verified 82 to a claimable 90 is:
 Until those are complete, the safe external claim is:
 
 > Acrobat-class local PDF editor prototype with verified engine-backed OCR
-> correction, certificate signing, forms, sanitizer, preflight reporting,
-> compare/batch UI workflows, and an 82/100 external replacement readiness
+> correction, certificate signing, forms, sanitizer, PDF/X-3 preflight fixup,
+> compare/batch UI workflows, representative Acrobat/Preview/Chrome/Edge
+> viewer smoke, and a 90/100 external replacement readiness
 > score.

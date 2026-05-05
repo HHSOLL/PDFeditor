@@ -12,6 +12,7 @@ import type {
   OcrCorrectionRequest,
   OcrRequest,
   OcrStatus,
+  PreflightFixupResponse,
   PreflightReport,
   SignatureValidation,
 } from "../types";
@@ -69,6 +70,28 @@ export async function preflightPdfWithEngine(bytes: Uint8Array): Promise<Preflig
     fallback.warnings.push("전체 사전 검사 endpoint를 사용할 수 없어 구조 검증만 실행했습니다.");
   }
   return fallback;
+}
+
+export async function preflightFixupPdfWithEngine(bytes: Uint8Array, targetProfile = "pdfx-3"): Promise<PreflightFixupResponse | null> {
+  const endpoints = buildEngineEndpoints("/api/pdf/preflight-fixup");
+  for (const endpoint of endpoints) {
+    try {
+      const response = await postJson(endpoint, {
+        pdfBase64: bytesToBase64(bytes),
+        targetProfile,
+      });
+      if (!response.ok) {
+        continue;
+      }
+      const result: unknown = await response.json();
+      if (isPreflightFixupResponse(result)) {
+        return result;
+      }
+    } catch (error) {
+      console.warn(`PDF engine preflight fixup failed at ${endpoint}`, error);
+    }
+  }
+  return null;
 }
 
 export async function getOcrStatusWithEngine(language = "eng"): Promise<OcrStatus | null> {
@@ -291,6 +314,19 @@ function isEngineApplyResponse(value: unknown): value is EngineApplyResponse {
     typeof value === "object" &&
     value !== null &&
     typeof (value as Record<string, unknown>).pdfBase64 === "string"
+  );
+}
+
+function isPreflightFixupResponse(value: unknown): value is PreflightFixupResponse {
+  if (typeof value !== "object" || value === null) {
+    return false;
+  }
+  const candidate = value as Record<string, unknown>;
+  return (
+    typeof candidate.ok === "boolean" &&
+    typeof candidate.pdfBase64 === "string" &&
+    typeof candidate.report === "object" &&
+    candidate.report !== null
   );
 }
 

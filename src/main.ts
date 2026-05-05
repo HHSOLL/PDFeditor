@@ -33,6 +33,7 @@ import {
   correctOcrPdfWithEngine,
   getOcrStatusWithEngine,
   ocrPdfWithEngine,
+  preflightFixupPdfWithEngine,
   preflightPdfWithEngine,
   repairAccessibilityWithEngine,
   signPdfWithCertificate,
@@ -178,6 +179,14 @@ registerCommand({
   enabled: () => Boolean(originalBytes && pdfDocument),
   disabledReason: () => "먼저 PDF를 열어주세요.",
   run: () => void runPreflightCheck(),
+});
+registerCommand({
+  id: "preflight-fixup-pdfx",
+  label: "PDF/X-3 수정",
+  implemented: true,
+  enabled: () => Boolean(originalBytes && pdfDocument),
+  disabledReason: () => "먼저 PDF를 열어주세요.",
+  run: () => void runPreflightPdfxFixup(),
 });
 registerCommand({
   id: "ocr-status",
@@ -3288,6 +3297,7 @@ function documentFields(): string {
     </div>
     <div class="mini-actions">
       <button id="preflightButton" type="button">사전 검사</button>
+      <button id="preflightFixupButton" type="button">PDF/X-3 수정</button>
     </div>
     ${lastPreflightReport ? renderPreflightPanel(lastPreflightReport, escapeHtml) : ""}
     <details class="metadata-panel product-tool-panel" open>
@@ -3583,6 +3593,7 @@ function bindDocumentControls(): void {
     commitHistory();
   });
   bindCommandButton("preflightButton", "preflight-pdf");
+  bindCommandButton("preflightFixupButton", "preflight-fixup-pdfx");
   bindDocumentToolFields();
   bindCommandButton("ocrStatusButton", "ocr-status");
   bindCommandButton("ocrRunButton", "ocr-run");
@@ -4223,6 +4234,36 @@ async function runPreflightCheck(): Promise<void> {
   lastPreflightReport = report;
   renderInspector();
   showToast(report.warnings.length ? `사전 검사 경고 ${report.warnings.length}개` : "사전 검사 통과");
+}
+
+async function runPreflightPdfxFixup(): Promise<void> {
+  if (!originalBytes || !pdfDocument) {
+    showToast("먼저 PDF를 열어주세요.");
+    return;
+  }
+  let bytes: Uint8Array;
+  try {
+    bytes = await buildExportPdfBytes();
+  } catch (error) {
+    showToast(error instanceof Error ? error.message : "PDF/X 수정용 PDF를 만들 수 없습니다.");
+    return;
+  }
+  const result = await preflightFixupPdfWithEngine(bytes, "pdfx-3");
+  if (!result) {
+    showToast("PDF/X-3 fixup 엔진을 실행할 수 없습니다. Ghostscript와 engine server를 확인하세요.");
+    return;
+  }
+  const fixedBytes = base64ToBytes(result.pdfBase64);
+  const validation = await validateExportedPdf(fixedBytes, result.report.after.validation?.pageCount ?? pageItems.length);
+  if (!validation.ok || !result.report.after.pdfxValidation?.passed) {
+    const errors = result.report.errors?.join(", ") || validation.errors.join(", ") || "PDF/X-3 구조 검증 실패";
+    showToast(`PDF/X-3 수정 실패: ${errors}`);
+    return;
+  }
+  const report = await preflightPdfWithEngine(fixedBytes);
+  lastPreflightReport = report;
+  renderInspector();
+  downloadPdf(fixedBytes, "PDF/X-3 fixup을 적용하고 구조 검증을 통과했습니다.");
 }
 
 async function runOcrStatusCheck(): Promise<void> {

@@ -59,7 +59,15 @@ embedded files, JavaScript/actions, form fields, fonts, page boxes, images,
 drawings, annotations, widgets, OCG/layer signals, XFA, signature fields,
 stale incremental saves, explicit tab-order pages, and unreferenced-object
 signals. It also reports PDF/A/PDF/X claim signals and OutputIntent counts. This
-is report-only and is not PDF/A or PDF/X certification.
+preflight report is not PDF/A or PDF/X certification.
+
+`engine/pdf_engine.py preflight-fixup --target pdfx-3` and
+`/api/pdf/preflight-fixup` run the bounded PDF/X-3 fixup path. The engine writes
+a new PDF with Ghostscript `pdfwrite`, embeds fonts, applies CMYK color
+conversion, injects an ICC-backed PDF/X OutputIntent, and then accepts the
+result only after qpdf, PyMuPDF, and local PDF/X structural validation pass. This
+is a PDF/X-3:2002 candidate fixup path, not arbitrary PDF/X profile support,
+PDF/A fixup support, or Acrobat Pro print-production parity.
 
 `engine/pdf_engine.py preflight --report report.pdf` writes the same inspection
 summary as a PDF report for release evidence and manual review.
@@ -124,6 +132,12 @@ any export without a successful engine response fails loudly.
 - `engine-preflight-report.mjs`: preflight report PDF generation.
 - `engine-preflight-standards-signals.mjs`: PDF/A claim and OutputIntent
   diagnostics.
+- `engine-pdfx-validation.mjs`: plain PDF failure plus Ghostscript-produced
+  PDF/X-3 output with claim, OutputIntent, embedded font, qpdf/PyMuPDF
+  validation, and searchable text preservation.
+- `engine-preflight-fixup.mjs`: `preflight-fixup --target pdfx-3` output bytes,
+  Ghostscript evidence, qpdf/PyMuPDF validation, and post-fixup PDF/X structural
+  validation.
 - `engine-accessibility-report.mjs`: document title/language and accessibility
   triage report generation.
 - `engine-accessibility-repair.mjs`: basic accessibility repair for

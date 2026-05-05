@@ -12,6 +12,7 @@ import argparse
 import base64
 import binascii
 import datetime as dt
+import glob
 import io
 import json
 import os
@@ -142,6 +143,16 @@ def main() -> int:
     preflight_parser.add_argument("--report")
     preflight_parser.add_argument("--stdin", action="store_true")
     preflight_parser.add_argument("--stdout", action="store_true")
+
+    preflight_fixup_parser = subparsers.add_parser(
+        "preflight-fixup",
+        help="Apply validated preflight fixups such as Ghostscript PDF/X-3 conversion",
+    )
+    preflight_fixup_parser.add_argument("--input")
+    preflight_fixup_parser.add_argument("--output")
+    preflight_fixup_parser.add_argument("--target", default="pdfx-3", choices=["pdfx-3"])
+    preflight_fixup_parser.add_argument("--stdin", action="store_true")
+    preflight_fixup_parser.add_argument("--stdout", action="store_true")
 
     compare_parser = subparsers.add_parser("compare", help="Compare two PDF files")
     compare_parser.add_argument("--input", required=True)
@@ -297,6 +308,35 @@ def main() -> int:
             write_json(result, sys.stdout)
         else:
             write_json(result, sys.stdout)
+        return 0
+
+    if args.command == "preflight-fixup":
+        if args.stdin:
+            payload = json.load(sys.stdin)
+            pdf_bytes = base64.b64decode(payload["pdfBase64"])
+            target = str(payload.get("targetProfile") or payload.get("target") or args.target)
+        else:
+            if not args.input:
+                raise SystemExit("--input is required without --stdin")
+            pdf_bytes = Path(args.input).read_bytes()
+            target = args.target
+        result = preflight_fixup_pdf_bytes(pdf_bytes, target)
+        if args.output:
+            Path(args.output).parent.mkdir(parents=True, exist_ok=True)
+            Path(args.output).write_bytes(result["pdfBytes"])
+        if args.stdout:
+            write_json(
+                {
+                    "ok": result["ok"],
+                    "pdfBase64": base64.b64encode(result["pdfBytes"]).decode("ascii"),
+                    "report": result["report"],
+                },
+                sys.stdout,
+            )
+        else:
+            if not args.output:
+                raise SystemExit("--output is required without --stdout")
+            write_json({"ok": result["ok"], "report": result["report"]}, sys.stdout)
         return 0
 
     if args.command == "compare":
@@ -1935,6 +1975,7 @@ def qpdf_check_command(qpdf_path: str, file_path: str, password: str) -> list[st
 def preflight_pdf_bytes(pdf_bytes: bytes) -> dict[str, Any]:
     validation = validate_pdf_bytes(pdf_bytes)
     standards_validation = validate_standards_with_verapdf(pdf_bytes)
+    pdfx_validation = validate_pdfx_structure(pdf_bytes)
     warnings: list[str] = []
     pages: list[dict[str, Any]] = []
     metadata_present = False
@@ -1976,6 +2017,7 @@ def preflight_pdf_bytes(pdf_bytes: bytes) -> dict[str, Any]:
                     embedded_file_count = 0
                 javascript_count = count_javascript_objects(document)
                 javascript_name_tree_count = count_javascript_name_tree_objects(document)
+                standard_claims = detect_standard_profile_claims(pdf_bytes, document)
                 standard_claims["outputIntentCount"] = count_output_intents(document)
                 xfa_present = detect_xfa(document)
                 hidden_layer_count = count_hidden_layers(document)
@@ -2060,11 +2102,18 @@ def preflight_pdf_bytes(pdf_bytes: bytes) -> dict[str, Any]:
             warnings.append("veraPDF standards validation did not complete")
     elif standards_validation.get("errors"):
         warnings.extend(str(error) for error in standards_validation.get("errors", []))
+    if pdfx_validation.get("claim"):
+        if not pdfx_validation.get("passed"):
+            profile_name = pdfx_validation.get("profileName") or pdfx_validation.get("claim") or "PDF/X"
+            warnings.append(f"PDF/X structural validation failed for {profile_name}")
+    elif os.environ.get("REQUIRE_PDFX_VALIDATION", "").lower() in {"1", "true", "yes"}:
+        warnings.append("PDF/X validation was required but the document has no PDF/X claim")
 
     return {
         "ok": validation["ok"] and len(warnings) == 0,
         "validation": validation,
         "standardsValidation": standards_validation,
+        "pdfxValidation": pdfx_validation,
         "warnings": warnings,
         "pageCount": validation["pageCount"],
         "encrypted": validation["encrypted"],
@@ -2092,6 +2141,272 @@ def preflight_pdf_bytes(pdf_bytes: bytes) -> dict[str, Any]:
         "fonts": sorted(font_names),
         "pages": pages,
     }
+
+
+def validate_pdfx_structure(pdf_bytes: bytes, expected_profile: str = "") -> dict[str, Any]:
+    validation = validate_pdf_bytes(pdf_bytes)
+    result: dict[str, Any] = {
+        "available": True,
+        "validator": "pdfedit-pdfx-structural",
+        "validated": False,
+        "passed": False,
+        "profileName": "",
+        "claim": "",
+        "expectedProfile": expected_profile,
+        "outputIntentCount": 0,
+        "outputIntentHasGtsPdfx": False,
+        "checks": [],
+        "errors": [],
+        "warnings": [],
+    }
+
+    def add_check(check_id: str, passed: bool, message: str, severity: str = "error") -> None:
+        result["checks"].append(
+            {
+                "id": check_id,
+                "passed": bool(passed),
+                "severity": severity,
+                "message": message,
+            }
+        )
+        if not passed:
+            if severity == "error":
+                result["errors"].append(message)
+            else:
+                result["warnings"].append(message)
+
+    add_check("pymupdf-qpdf-open", bool(validation.get("ok")), "PDF must open in PyMuPDF and pass qpdf")
+    add_check("not-encrypted", not bool(validation.get("encrypted")), "PDF/X output must not be encrypted")
+
+    try:
+        with fitz.open(stream=pdf_bytes, filetype="pdf") as document:
+            claims = detect_standard_profile_claims(pdf_bytes, document)
+            claim = str(claims.get("pdfxClaim") or "")
+            profile = normalize_pdfx_profile(claim)
+            result["claim"] = claim
+            result["profileName"] = profile
+            result["outputIntentCount"] = count_output_intents(document)
+            result["outputIntentHasGtsPdfx"] = output_intent_has_gts_pdfx(document)
+            add_check("pdfx-claim-present", bool(claim), "PDF/X claim is missing")
+            if expected_profile:
+                add_check(
+                    "pdfx-expected-profile",
+                    normalize_pdfx_profile(expected_profile) == profile,
+                    f"PDF/X profile does not match {expected_profile}",
+                )
+            add_check(
+                "pdfx-supported-profile",
+                not claim or profile in {"PDF/X-1a:2001", "PDF/X-3:2002"},
+                "Engine structural validation supports only PDF/X-1a:2001 and PDF/X-3:2002 profiles",
+                "warning",
+            )
+            add_check(
+                "output-intent-present",
+                int(result["outputIntentCount"]) > 0,
+                "PDF/X OutputIntent is missing",
+            )
+            add_check(
+                "output-intent-gts-pdfx",
+                bool(result["outputIntentHasGtsPdfx"]),
+                "OutputIntent /S /GTS_PDFX is missing",
+            )
+            trapped = find_document_info_name(document, "Trapped")
+            add_check("trapped-present", trapped in {"/True", "/False"}, "Info dictionary /Trapped /True or /False is missing")
+
+            missing_boxes = find_pages_missing_pdfx_boxes(document)
+            add_check(
+                "trim-or-art-boxes",
+                not missing_boxes,
+                "One or more pages lack TrimBox or ArtBox",
+            )
+            if missing_boxes:
+                result["missingBoxPages"] = missing_boxes
+
+            font_issues = find_unembedded_font_issues(document)
+            add_check(
+                "fonts-embedded",
+                not font_issues,
+                "One or more page fonts are not embedded",
+            )
+            if font_issues:
+                result["fontIssues"] = font_issues[:20]
+
+            transparency_count = count_pdf_transparency_signals(document)
+            add_check(
+                "no-transparency",
+                transparency_count == 0,
+                "Transparency signals are present and are not allowed for PDF/X-1a/3 compatibility",
+            )
+            result["transparencySignalCount"] = transparency_count
+
+            action_count = count_javascript_objects(document) + count_javascript_name_tree_objects(document)
+            for page in document:
+                action_count += len(page.get_links())
+            add_check(
+                "no-interactive-actions",
+                action_count == 0,
+                "JavaScript or link actions remain in the PDF/X candidate",
+                "warning",
+            )
+            result["interactiveActionSignalCount"] = action_count
+            result["validated"] = bool(validation.get("ok"))
+    except Exception as exc:  # noqa: BLE001 - diagnostics should be returned as JSON
+        result["errors"].append(str(exc))
+
+    result["passed"] = bool(result["validated"]) and not result["errors"]
+    return result
+
+
+def preflight_fixup_pdf_bytes(pdf_bytes: bytes, target_profile: str = "pdfx-3") -> dict[str, Any]:
+    if target_profile != "pdfx-3":
+        raise ValueError("only pdfx-3 preflight fixup is currently implemented")
+    before = preflight_pdf_bytes(pdf_bytes)
+    output_bytes, fixup_report = ghostscript_pdfx3_fixup(pdf_bytes)
+    after = preflight_pdf_bytes(output_bytes)
+    pdfx_after = after.get("pdfxValidation", {})
+    ok = bool(after.get("validation", {}).get("ok")) and bool(pdfx_after.get("passed"))
+    report = {
+        "ok": ok,
+        "targetProfile": "PDF/X-3:2002",
+        "engine": "ghostscript-pdfwrite",
+        "fixup": fixup_report,
+        "before": {
+            "validation": before.get("validation"),
+            "pdfxValidation": before.get("pdfxValidation"),
+            "warnings": before.get("warnings", []),
+        },
+        "after": {
+            "validation": after.get("validation"),
+            "pdfxValidation": pdfx_after,
+            "warnings": after.get("warnings", []),
+            "pdfxClaim": after.get("pdfxClaim", ""),
+            "outputIntentCount": after.get("outputIntentCount", 0),
+        },
+    }
+    if not ok:
+        errors = list(pdfx_after.get("errors", [])) if isinstance(pdfx_after, dict) else []
+        if not errors:
+            errors = list(after.get("validation", {}).get("errors", []))
+        report["errors"] = errors or ["PDF/X-3 fixup output did not pass validation"]
+    return {"ok": ok, "pdfBytes": output_bytes, "report": report}
+
+
+def ghostscript_pdfx3_fixup(pdf_bytes: bytes) -> tuple[bytes, dict[str, Any]]:
+    gs_path = os.environ.get("GHOSTSCRIPT_BIN") or shutil.which("gs")
+    report: dict[str, Any] = {
+        "engine": "ghostscript",
+        "enginePath": gs_path or "",
+        "engineVersion": "",
+        "targetProfile": "PDF/X-3:2002",
+        "iccProfile": "",
+        "command": [],
+        "stderr": "",
+        "stdout": "",
+    }
+    if not gs_path:
+        message = "Ghostscript is required for PDF/X-3 preflight fixup but was not found on PATH"
+        if os.environ.get("REQUIRE_PREFLIGHT_FIXUP", "").lower() in {"1", "true", "yes"}:
+            raise RuntimeError(message)
+        raise RuntimeError(message)
+
+    version = subprocess.run([gs_path, "--version"], check=False, capture_output=True, text=True)
+    report["engineVersion"] = version.stdout.strip() or version.stderr.strip()
+    icc_profile = resolve_pdfx_icc_profile()
+    report["iccProfile"] = str(icc_profile)
+
+    with tempfile.TemporaryDirectory(prefix="pdfedit-pdfx-") as temp_name:
+        temp_dir = Path(temp_name)
+        input_path = temp_dir / "input.pdf"
+        output_path = temp_dir / "output-pdfx3.pdf"
+        pdfx_def_path = temp_dir / "PDFX_def.ps"
+        input_path.write_bytes(pdf_bytes)
+        pdfx_def_path.write_text(build_pdfx_def_ps(icc_profile), encoding="utf-8")
+        command = [
+            gs_path,
+            "-q",
+            "-dPDFX=3",
+            "-dBATCH",
+            "-dNOPAUSE",
+            "-dSAFER",
+            "-dPDFSTOPONERROR",
+            "-dPDFACompatibilityPolicy=1",
+            "-dEmbedAllFonts=true",
+            "-dSubsetFonts=true",
+            "-dCompressFonts=true",
+            "-sProcessColorModel=DeviceCMYK",
+            "-sColorConversionStrategy=CMYK",
+            "-sDEVICE=pdfwrite",
+            f"-sOutputFile={output_path}",
+            str(pdfx_def_path),
+            str(input_path),
+        ]
+        report["command"] = redact_temp_paths(command)
+        completed = subprocess.run(command, check=False, capture_output=True, text=True, timeout=120)
+        report["exitCode"] = completed.returncode
+        report["stderr"] = completed.stderr.strip()
+        report["stdout"] = completed.stdout.strip()
+        if completed.returncode != 0:
+            raise RuntimeError(completed.stderr.strip() or completed.stdout.strip() or "Ghostscript PDF/X-3 fixup failed")
+        if not output_path.exists() or output_path.stat().st_size == 0:
+            raise RuntimeError("Ghostscript PDF/X-3 fixup did not create an output PDF")
+        return output_path.read_bytes(), report
+
+
+def resolve_pdfx_icc_profile() -> Path:
+    env_path = os.environ.get("PDFX_ICC_PROFILE")
+    if env_path and Path(env_path).exists():
+        return Path(env_path)
+    patterns = [
+        "/opt/homebrew/Cellar/ghostscript/*/share/ghostscript/iccprofiles/default_cmyk.icc",
+        "/opt/homebrew/share/ghostscript/*/iccprofiles/default_cmyk.icc",
+        "/usr/local/share/ghostscript/*/iccprofiles/default_cmyk.icc",
+        "/usr/share/ghostscript/*/iccprofiles/default_cmyk.icc",
+        "/usr/share/color/icc/*CMYK*.icc",
+    ]
+    for pattern in patterns:
+        matches = sorted(glob.glob(pattern), reverse=True)
+        for match in matches:
+            candidate = Path(match)
+            if candidate.exists():
+                return candidate
+    raise RuntimeError("No CMYK ICC profile found for PDF/X-3 fixup; set PDFX_ICC_PROFILE")
+
+
+def build_pdfx_def_ps(icc_profile: Path) -> str:
+    icc = ps_string_escape(str(icc_profile))
+    return f"""%!
+% Generated by PDFeditor for Ghostscript PDF/X-3 fixup.
+% Ghostscript pdfwrite consumes this prefix through pdfmark.
+[ /GTS_PDFXVersion (PDF/X-3:2002)
+  /Title (PDFeditor PDF/X-3 Fixup)
+  /Trapped /False
+/DOCINFO pdfmark
+
+/ICCProfile ({icc}) def
+[/_objdef {{icc_PDFX}} /type /stream /OBJ pdfmark
+[{{icc_PDFX}} << /N 4 >> /PUT pdfmark
+[{{icc_PDFX}} ICCProfile (r) file /PUT pdfmark
+
+[/_objdef {{OutputIntent_PDFX}} /type /dict /OBJ pdfmark
+[{{OutputIntent_PDFX}} <<
+  /Type /OutputIntent
+  /S /GTS_PDFX
+  /OutputCondition (PDFeditor CMYK PDF/X-3 fixup)
+  /Info (Ghostscript pdfwrite PDF/X-3)
+  /OutputConditionIdentifier (PDFeditor-CMYK)
+  /RegistryName (http://www.color.org)
+  /DestOutputProfile {{icc_PDFX}}
+>> /PUT pdfmark
+[{{Catalog}} <</OutputIntents [ {{OutputIntent_PDFX}} ]>> /PUT pdfmark
+"""
+
+
+def ps_string_escape(value: str) -> str:
+    return value.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
+
+
+def redact_temp_paths(command: list[str]) -> list[str]:
+    return [re.sub(r"/[^ ]*/pdfedit-pdfx-[^/]+", "<tmp>", part) for part in command]
 
 
 def validate_standards_with_verapdf(pdf_bytes: bytes) -> dict[str, Any]:
@@ -2253,6 +2568,19 @@ def write_preflight_report_pdf(result: dict[str, Any], output_path: Path) -> Non
             first_error = failures[0].get("errorMessage", "")
             if first_error:
                 lines.append(f"veraPDF first error: {first_error}")
+    pdfx = result.get("pdfxValidation", {})
+    if isinstance(pdfx, dict):
+        lines.extend(
+            [
+                f"PDF/X validator: {pdfx.get('validator', 'n/a')}",
+                f"PDF/X claim: {pdfx.get('claim') or 'none'}",
+                f"PDF/X structural pass: {pdfx.get('passed')}",
+                f"PDF/X OutputIntent count: {pdfx.get('outputIntentCount', 0)}",
+            ]
+        )
+        errors = pdfx.get("errors", [])
+        if isinstance(errors, list) and errors:
+            lines.append(f"PDF/X first error: {errors[0]}")
     lines.extend(["", "Warnings:"])
     warnings = result.get("warnings", [])
     if isinstance(warnings, list) and warnings:
@@ -3304,7 +3632,7 @@ def count_unreferenced_object_signals(pdf_bytes: bytes) -> int:
     return sum(1 for pattern in patterns if re.search(pattern, pdf_bytes))
 
 
-def detect_standard_profile_claims(pdf_bytes: bytes) -> dict[str, Any]:
+def detect_standard_profile_claims(pdf_bytes: bytes, document: fitz.Document | None = None) -> dict[str, Any]:
     text = pdf_bytes.decode("latin1", errors="ignore")
     pdfa_claim = ""
     pdfx_claim = ""
@@ -3314,14 +3642,64 @@ def detect_standard_profile_claims(pdf_bytes: bytes) -> dict[str, Any]:
         pdfa_claim = f"PDF/A-{part_match.group(1)}"
         if conformance_match:
             pdfa_claim += conformance_match.group(1).upper()
-    pdfx_match = re.search(r"(?:GTS_PDFXVersion|pdfxid:GTS_PDFXVersion)[^>]*>?\s*([A-Za-z0-9:_\\-]+)", text)
-    if pdfx_match:
-        pdfx_claim = pdfx_match.group(1).strip()
+    pdfx_claim = detect_pdfx_claim_text(text)
+    if not pdfx_claim and document is not None:
+        pdfx_claim = detect_pdfx_claim_document(document)
     return {
         "pdfaClaim": pdfa_claim,
         "pdfxClaim": pdfx_claim,
         "outputIntentCount": len(re.findall(r"/OutputIntent\b", text)),
     }
+
+
+def detect_pdfx_claim_text(text: str) -> str:
+    xmp_patterns = [
+        r"<pdfxid:GTS_PDFXVersion>\s*([^<]+)",
+        r"<[^:>]*:?GTS_PDFXVersion>\s*([^<]+)",
+    ]
+    for pattern in xmp_patterns:
+        match = re.search(pattern, text, flags=re.IGNORECASE)
+        if match:
+            return match.group(1).strip()
+    info_match = re.search(
+        r"/GTS_PDFXVersion\s*(?:\(([^)]*)\)|<([0-9A-Fa-f]+)>|/([^\s/<>\[\]()]+))",
+        text,
+    )
+    if not info_match:
+        return ""
+    if info_match.group(1):
+        return info_match.group(1).strip()
+    if info_match.group(2):
+        try:
+            return bytes.fromhex(info_match.group(2)).decode("latin1", errors="ignore").strip()
+        except ValueError:
+            return ""
+    return (info_match.group(3) or "").strip()
+
+
+def detect_pdfx_claim_document(document: fitz.Document) -> str:
+    for xref in range(1, document.xref_length()):
+        try:
+            source = document.xref_object(xref, compressed=False)
+        except Exception:  # noqa: BLE001
+            continue
+        claim = detect_pdfx_claim_text(source)
+        if claim:
+            return claim
+    return ""
+
+
+def normalize_pdfx_profile(profile: str) -> str:
+    value = profile.strip()
+    if not value:
+        return ""
+    value = value.replace("\\", "")
+    upper = value.upper()
+    if "PDF/X-3" in upper:
+        return "PDF/X-3:2002" if "2003" not in upper else "PDF/X-3:2003"
+    if "PDF/X-1A" in upper or "PDF/X-1" in upper:
+        return "PDF/X-1a:2001"
+    return value
 
 
 def count_output_intents(document: fitz.Document) -> int:
@@ -3332,6 +3710,111 @@ def count_output_intents(document: fitz.Document) -> int:
         except Exception:  # noqa: BLE001
             continue
         if re.search(r"/OutputIntent\b", source):
+            count += 1
+    return count
+
+
+def output_intent_has_gts_pdfx(document: fitz.Document) -> bool:
+    for xref in range(1, document.xref_length()):
+        try:
+            source = document.xref_object(xref, compressed=False)
+        except Exception:  # noqa: BLE001
+            continue
+        if re.search(r"/Type\s*/OutputIntent\b", source) and re.search(r"/S\s*/GTS_PDFX\b", source):
+            return True
+    return False
+
+
+def find_document_info_name(document: fitz.Document, key: str) -> str:
+    try:
+        kind, value = document.xref_get_key(-1, f"Info/{key}")
+        if kind == "name":
+            return value
+    except Exception:  # noqa: BLE001
+        pass
+    for xref in range(1, document.xref_length()):
+        try:
+            source = document.xref_object(xref, compressed=False)
+        except Exception:  # noqa: BLE001
+            continue
+        match = re.search(rf"/{re.escape(key)}\s+(/(?:True|False))\b", source)
+        if match:
+            return match.group(1)
+    return ""
+
+
+def find_pages_missing_pdfx_boxes(document: fitz.Document) -> list[int]:
+    missing: list[int] = []
+    for page_index in range(document.page_count):
+        page = document.load_page(page_index)
+        has_box = False
+        for box_key in ("TrimBox", "ArtBox"):
+            try:
+                kind, value = document.xref_get_key(page.xref, box_key)
+            except Exception:  # noqa: BLE001
+                kind, value = "null", "null"
+            if kind != "null" and value != "null":
+                has_box = True
+                break
+        if not has_box:
+            missing.append(page_index)
+    return missing
+
+
+def find_unembedded_font_issues(document: fitz.Document) -> list[dict[str, Any]]:
+    issues: list[dict[str, Any]] = []
+    seen: set[tuple[int, str]] = set()
+    for page_index in range(document.page_count):
+        page = document.load_page(page_index)
+        for font in page.get_fonts(full=True):
+            xref = int(font[0] or 0)
+            name = str(font[3] or font[4] or "unknown")
+            key = (xref, name)
+            if key in seen:
+                continue
+            seen.add(key)
+            if xref <= 0 or not font_is_embedded(document, xref):
+                issues.append({"pageIndex": page_index, "xref": xref, "fontName": name})
+    return issues
+
+
+def font_is_embedded(document: fitz.Document, xref: int) -> bool:
+    stack = [xref]
+    visited: set[int] = set()
+    while stack and len(visited) < 40:
+        current = stack.pop()
+        if current in visited or current <= 0 or current >= document.xref_length():
+            continue
+        visited.add(current)
+        try:
+            source = document.xref_object(current, compressed=False)
+        except Exception:  # noqa: BLE001
+            continue
+        if re.search(r"/FontFile(?:2|3)?\b", source):
+            return True
+        for ref in re.findall(r"(\d+)\s+\d+\s+R", source):
+            try:
+                stack.append(int(ref))
+            except ValueError:
+                continue
+    return False
+
+
+def count_pdf_transparency_signals(document: fitz.Document) -> int:
+    count = 0
+    transparency_patterns = [
+        r"/SMask\s+(?!/None\b|null\b)",
+        r"/ca\s+0?\.\d+",
+        r"/CA\s+0?\.\d+",
+        r"/BM\s*/(?!Normal\b)[A-Za-z0-9]+",
+        r"/Group\s*<<[^>]*?/S\s*/Transparency",
+    ]
+    for xref in range(1, document.xref_length()):
+        try:
+            source = document.xref_object(xref, compressed=False)
+        except Exception:  # noqa: BLE001
+            continue
+        if any(re.search(pattern, source, flags=re.DOTALL) for pattern in transparency_patterns):
             count += 1
     return count
 

@@ -7,19 +7,21 @@ exports score zero.
 
 ## Scoring Snapshot
 
-Current automated score: **84 / 100**.
+Current automated score: **85 / 100**.
 
 External replacement readiness is tracked separately in
-`docs/acrobat-replacement-score.md`. The current external score is **82 / 100
-verified**, and an external 90+ claim is not allowed until the manual
-compatibility and packaging gates in that document are complete.
+`docs/acrobat-replacement-score.md`. The current external score is **90 / 100
+verified** after representative Acrobat/Preview/Chrome/Edge open/render smoke.
+An external score above 90 is not allowed until the deeper feature-panel,
+real-world corpus, and packaging gates in that document are complete.
 
 This is a verified advanced prototype. It is not yet an Acrobat Pro replacement.
 The strongest areas are continuous viewer behavior, qpdf/PyMuPDF/PDF.js export
 validation, imported annotations, AcroForm filling and field creation including
-signature widgets, XFDF import/export, report-only preflight with report PDF
-export, PDF/A/X claim diagnostics, and veraPDF-backed PDF/A/PDF/UA validation
-output when the validator is installed, hidden-info sanitizer coverage, engine-backed
+signature widgets, XFDF import/export, preflight reporting with report PDF
+export, PDF/A/X claim diagnostics, veraPDF-backed PDF/A/PDF/UA validation
+output when the validator is installed, and Ghostscript-backed PDF/X-3 fixup
+with qpdf/PyMuPDF/PDF/X structural validation, hidden-info sanitizer coverage, engine-backed
 page organization including external PDF page insertion and bookmark remapping,
 CMS ByteRange certificate signing with DocMDP lock policy, local OCR searchable
 PDF export with Korean corpus and scanned-page correction rebuilding, simple
@@ -28,11 +30,13 @@ paths including UI-driven `moveImage`, vector delete, file attachment comments,
 inspector compare report download with changed-region overlay and first-change
 navigation, inspector batch quick actions with saved preset reload, changed-region
 compare report data, existing vector object selection/object-inspector export,
-100-job batch apply evidence, and smoke-tested local release
-packaging. Timestamped PAdES/LTV trust, full
-PDF/UA validation, PDF/A/X certification/fixups, full vector editing,
+100-job batch apply evidence, smoke-tested local release packaging, and
+representative 50-PDF Acrobat/Preview/Chrome/Edge open/render smoke.
+Timestamped PAdES/LTV trust, full
+PDF/UA validation, PDF/A certification/fixups, arbitrary PDF/X profile
+certification/fixups, full vector editing,
 full action-builder UI/queue, native/managed production deployment, and broad
-Acrobat/Preview/Chrome/Edge visual smoke remain non-claimable.
+feature-panel Acrobat/Preview/Chrome/Edge compatibility remain non-claimable.
 
 | Area | Target Points | Current Points | Current Status | Automated Evidence | Completion Criteria | Remaining Work |
 | --- | ---: | ---: | --- | --- | --- | --- |
@@ -47,14 +51,18 @@ Acrobat/Preview/Chrome/Edge visual smoke remain non-claimable.
 | Full redaction / sanitizer | 10 | 7 | Real redaction policies; literal search, regex, whole-page redaction; sanitizer removes metadata, XMP, embedded files, file attachment annotations, comments, annotation actions, JavaScript/name trees, link actions, hidden layer catalog entries, search-index signals, stale incremental saves, unreferenced object signals, thumbnails | `tests/engine-sanitizer-preflight.mjs`, `tests/engine-search-redaction.mjs`, redaction tests in `tests/engine-smoke.mjs` | Search/regex/whole-page redaction plus full hidden-data sanitizer leaves no secrets in text extraction, raw bytes, xref scan, unreferenced data, attachments, JS/actions, OCG, comments, stale history | Add third-party hidden-data corpus, obscured content removal, multimedia/RichMedia, Acrobat Pro sanitizer manual smoke |
 | OCR / scanned PDF editing | 7 | 6 | Local Tesseract-backed OCR status checks, English and Korean scanned image-over-text PDF export, scanned-page correction rebuilding that replaces stale OCR text layers with corrected invisible searchable text, and inspector UI for OCR status/run/correction | `tests/ensure-ocr.mjs`, `tests/engine-ocr-searchable.mjs`, `tests/engine-ocr-korean-correction.mjs`, OCR UI cases in `tests/pdf-editor.spec.ts`, CI installs Tesseract English/Korean language data | Scanned Korean/English PDFs become searchable/editable with OCR text layer, correction UI, image-over-text save, qpdf/PyMuPDF validation | Add selection-based correction UI, cloud/queue OCR worker, deskew/orientation preprocessing |
 | Accessibility / PDF/UA | 6 | 4 | Basic accessibility report plus inspector-accessible structural repair for title, document language, MarkInfo/StructTreeRoot signal, page tab order, and image object alternate-text metadata | `tests/engine-accessibility-report.mjs`, `tests/engine-accessibility-repair.mjs`, accessibility UI cases in `tests/pdf-editor.spec.ts` | Document title/language, tag tree import/edit, reading order, alt text, artifacts, form descriptions, PDF/UA basic report and tagged save | Add real tag-tree editor, reading-order authoring, artifact marking, PDF/UA validator, tagged corpus |
-| Preflight / PDF/A / PDF/X / print production | 6 | 4 | Report-only preflight for structure, hidden-info signals, forms, fonts, page boxes, images, drawings, annotations, XFA/signature indicators, PDF/A/PDF/X claim diagnostics, OutputIntent signals, generated report PDF, and veraPDF-backed PDF/A/PDF/UA validation output | `tests/engine-sanitizer-preflight.mjs`, `tests/engine-preflight-report.mjs`, `tests/engine-preflight-standards-signals.mjs`, `tests/engine-standards-validator.mjs`, `docs/manual-smoke-2026-05-04.md` | PDF/X validation, font/image/color/pagebox/ICC/spot/overprint/transparency checks, output preview, report export, limited fixups verified against Acrobat Pro | Keep fixups/certification unclaimed; add PDF/X-capable validator/pro SDK, PDF/A/X corpus, and manual comparison |
+| Preflight / PDF/A / PDF/X / print production | 6 | 5 | Preflight for structure, hidden-info signals, forms, fonts, page boxes, images, drawings, annotations, XFA/signature indicators, PDF/A/PDF/X claim diagnostics, OutputIntent signals, generated report PDF, veraPDF-backed PDF/A/PDF/UA validation output, local PDF/X structural validation, and Ghostscript-backed PDF/X-3 fixup with post-fixup qpdf/PyMuPDF validation | `tests/engine-sanitizer-preflight.mjs`, `tests/engine-preflight-report.mjs`, `tests/engine-preflight-standards-signals.mjs`, `tests/engine-standards-validator.mjs`, `tests/engine-pdfx-validation.mjs`, `tests/engine-preflight-fixup.mjs`, `docs/manual-smoke-2026-05-04.md` | PDF/A validation/fixups, arbitrary PDF/X profile validation/fixups, font/image/color/pagebox/ICC/spot/overprint/transparency checks, output preview, report export, limited fixups verified against Acrobat Pro | Keep broad certification unclaimed; add PDF/A/X corpus, Acrobat Preflight comparison, PDF/A fixup path, arbitrary PDF/X profile coverage, and print-production preview features |
 | Compare files | 3 | 3 | Engine CLI/API returns page count changes, changed page list, text previews, render-diff metrics, changed-area bounding regions, report PDF, and inspector UI can select a target PDF, show changed regions on page, jump to the first changed page, and download the report | `tests/engine-compare.mjs`, compare UI case in `tests/pdf-editor.spec.ts`, compare endpoint in `tests/release-smoke.mjs` | Text/render/annotation/page/object diff with changed-area overlay and report PDF | Add annotation/object diff and richer diff navigation |
 | Batch action / automation | 3 | 3 | Engine manifest runner applies PDF jobs with per-job validation and failure reporting; inspector quick action applies watermark, search redaction, and sanitizer; inspector presets persist and reload batch settings; tested with text insertion, search redaction, sanitizer jobs, and a 100-output batch corpus | `tests/engine-batch-action.mjs`, `tests/engine-batch-100.mjs`, batch UI case in `tests/pdf-editor.spec.ts`, batch endpoint in `tests/release-smoke.mjs` | Saved action builder runs OCR, sanitize, redact, watermark, flatten, split/merge, preflight, convert across 100 PDFs with logs and failure report | Add full multi-step action-builder UI, queue/worker model, OCR/convert/preflight steps |
 | Packaging / deployment / productization | 2 | 2 | Local web app with Python engine server, strict local verification, production-server release smoke, and a smoke-tested local release package with launcher | `npm run verify:local`, `npm run test:release-smoke`, `npm run test:package-smoke`, GitHub Actions strict engine path | Web deployment, queued workers, object storage, auth, billing, audit logs, virus scan, retention policy, desktop/local package, crash recovery | Build native desktop package or managed web deployment with logs and recovery |
 
 ## Non-Claimable Boundaries
 
-- **Preflight fixups:** current preflight is validator-backed report-only for PDF/A/PDF/UA when veraPDF is installed. PDF/X certification, output fixups, and print-production parity still require a PDF/X-capable professional SDK or equivalent validated engine.
+- **Preflight fixups:** PDF/X-3 fixup is implemented through Ghostscript `pdfwrite`
+  and is accepted only after qpdf, PyMuPDF, and local PDF/X structural validation.
+  Full PDF/X certification, arbitrary PDF/X profile support, PDF/A fixups, output
+  preview, separations, ink coverage, and print-production parity still require
+  broader validators/professional SDK evidence and Acrobat Preflight comparison.
 - **Digital signatures:** CMS ByteRange signing, DocMDP lock policy encoding, and cryptographic validation are implemented. Timestamping, LTV/revocation data, and enterprise trust stores are not claimed.
 - **OCR:** local searchable-PDF OCR, Korean fixture coverage, and scanned-page correction rebuilding are implemented. Browser correction UI, scanned semantic text editing beyond corrected invisible text layers, deskew/orientation preprocessing, and production OCR queues are not claimed.
 - **Accessibility/PDF/UA:** basic reporting and structural repair for title/language/tag signal/alt text exist, but full tag-tree editing, reading-order repair, artifact marking, and PDF/UA checks are not implemented.

@@ -34,6 +34,20 @@ export function validationPreflightFallback(validation: ExportValidation): Prefl
     pdfaClaim: "",
     pdfxClaim: "",
     outputIntentCount: 0,
+    pdfxValidation: {
+      available: true,
+      validator: "pdfedit-pdfx-structural",
+      validated: validation.ok,
+      passed: false,
+      profileName: "",
+      claim: "",
+      expectedProfile: "",
+      outputIntentCount: 0,
+      outputIntentHasGtsPdfx: false,
+      checks: [],
+      errors: ["preflight engine unavailable; PDF/X structural validator was not run"],
+      warnings: [],
+    },
     standardsValidation: {
       available: false,
       validator: "verapdf",
@@ -72,6 +86,9 @@ export function summarizePreflightReport(report: PreflightReport) {
     report.pdfaClaim ? `${report.pdfaClaim} claim` : "",
     report.pdfxClaim ? `${report.pdfxClaim} claim` : "",
     report.outputIntentCount ? `${report.outputIntentCount} output intent` : "",
+    report.pdfxValidation?.claim
+      ? `PDF/X ${report.pdfxValidation.passed ? "pass" : "fail"} (${report.pdfxValidation.profileName || report.pdfxValidation.claim})`
+      : "PDF/X claim none",
     report.standardsValidation?.available
       ? `veraPDF ${report.standardsValidation.passed ? "pass" : "fail"} (${report.standardsValidation.profileName || "auto"})`
       : "veraPDF not available",

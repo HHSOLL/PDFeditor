@@ -336,6 +336,41 @@ export interface EngineApplyResponse {
   validation?: ExportValidation;
 }
 
+export interface PreflightFixupResponse {
+  ok: boolean;
+  pdfBase64: string;
+  report: PreflightFixupReport;
+}
+
+export interface PreflightFixupReport {
+  ok: boolean;
+  targetProfile: string;
+  engine: string;
+  fixup: {
+    engine: string;
+    enginePath: string;
+    engineVersion: string;
+    targetProfile: string;
+    iccProfile: string;
+    exitCode?: number;
+    stderr?: string;
+    stdout?: string;
+  };
+  before: {
+    validation?: ExportValidation;
+    pdfxValidation?: PdfxValidationReport;
+    warnings?: string[];
+  };
+  after: {
+    validation?: ExportValidation;
+    pdfxValidation?: PdfxValidationReport;
+    warnings?: string[];
+    pdfxClaim?: string;
+    outputIntentCount?: number;
+  };
+  errors?: string[];
+}
+
 export interface ExportValidation {
   ok: boolean;
   pageCount: number;
@@ -352,6 +387,7 @@ export interface PreflightReport {
   warnings: string[];
   pageCount: number;
   standardsValidation?: StandardsValidationReport;
+  pdfxValidation?: PdfxValidationReport;
   metadataPresent: boolean;
   xmpPresent: boolean;
   embeddedFileCount: number;
@@ -373,6 +409,32 @@ export interface PreflightReport {
   pdfaClaim?: string;
   pdfxClaim?: string;
   outputIntentCount?: number;
+}
+
+export interface PdfxValidationCheck {
+  id: string;
+  passed: boolean;
+  severity: "error" | "warning";
+  message: string;
+}
+
+export interface PdfxValidationReport {
+  available: boolean;
+  validator: string;
+  validated: boolean;
+  passed: boolean;
+  profileName: string;
+  claim: string;
+  expectedProfile: string;
+  outputIntentCount: number;
+  outputIntentHasGtsPdfx: boolean;
+  checks: PdfxValidationCheck[];
+  errors: string[];
+  warnings: string[];
+  missingBoxPages?: number[];
+  fontIssues?: Array<{ pageIndex: number; xref: number; fontName: string }>;
+  transparencySignalCount?: number;
+  interactiveActionSignalCount?: number;
 }
 
 export interface StandardsValidationFailure {

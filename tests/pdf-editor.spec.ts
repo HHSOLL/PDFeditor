@@ -417,6 +417,17 @@ async function accessibilityReport(filePath: string): Promise<{ title: string; l
   return JSON.parse(stdout) as { title: string; language: string; imageAltTextCount: number };
 }
 
+async function preflightReport(filePath: string): Promise<{ pdfxClaim?: string; pdfxValidation?: { passed: boolean } }> {
+  const stdout = await runCommand("python3", [
+    path.join(root, "engine", "pdf_engine.py"),
+    "preflight",
+    "--input",
+    filePath,
+    "--stdout",
+  ]);
+  return JSON.parse(stdout) as { pdfxClaim?: string; pdfxValidation?: { passed: boolean } };
+}
+
 async function expectDocumentLoaded(page: Page, pageCountText = "1쪽"): Promise<void> {
   await expect(page.locator("#pageCount")).toHaveText(pageCountText, { timeout: 45_000 });
   await expect(page.locator(".page-stage").first()).toBeVisible({ timeout: 45_000 });
@@ -890,6 +901,7 @@ test("saves metadata and duplicated pages through the advanced save pipeline", a
 
 test("runs preflight from the inspector without an inert command button", async ({ page }) => {
   const samplePath = path.resolve("tmp/sample-preflight-ui.pdf");
+  const fixupPath = path.resolve("tmp/exported-pdfx-fixup-ui.pdf");
   await createSamplePdf(samplePath);
 
   await page.goto("http://127.0.0.1:5173/");
@@ -903,6 +915,18 @@ test("runs preflight from the inspector without an inert command button", async 
   await expect(page.locator(".preflight-panel")).toContainText("사전 검사");
   await expect(page.locator(".preflight-panel")).toContainText("1쪽");
   await expect(page.locator("#toast")).toContainText("사전 검사");
+
+  await expect(page.locator("#preflightFixupButton")).toBeEnabled();
+  const downloadPromise = page.waitForEvent("download");
+  await page.locator("#preflightFixupButton").click();
+  const download = await downloadPromise;
+  await download.saveAs(fixupPath);
+  await expect(page.locator(".preflight-panel")).toContainText("PDF/X 검증");
+  await expect(page.locator("#toast")).toContainText("PDF/X-3 fixup");
+
+  const report = await preflightReport(fixupPath);
+  expect(report.pdfxClaim).toBe("PDF/X-3:2002");
+  expect(report.pdfxValidation?.passed).toBe(true);
 });
 
 test("runs OCR correction from the inspector and exports searchable PDF text", async ({ page }) => {

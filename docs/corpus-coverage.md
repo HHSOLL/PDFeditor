@@ -48,7 +48,7 @@ REQUIRE_QPDF=1 node tests/engine-corpus-100.mjs
 | Signatures/security | `tests/engine-digital-signature.mjs`, `tests/engine-signature-simple.mjs`, `tests/engine-password-permissions.mjs` |
 | OCR | `tests/engine-ocr-searchable.mjs`, `tests/engine-ocr-korean-correction.mjs` |
 | Accessibility | `tests/engine-accessibility-report.mjs`, `tests/engine-accessibility-repair.mjs` |
-| Preflight/compare/batch | `tests/engine-preflight-report.mjs`, `tests/engine-preflight-standards-signals.mjs`, `tests/engine-standards-validator.mjs`, `tests/engine-compare.mjs`, `tests/engine-batch-action.mjs`, `tests/engine-batch-100.mjs` |
+| Preflight/compare/batch | `tests/engine-preflight-report.mjs`, `tests/engine-preflight-standards-signals.mjs`, `tests/engine-standards-validator.mjs`, `tests/engine-pdfx-validation.mjs`, `tests/engine-preflight-fixup.mjs`, `tests/engine-compare.mjs`, `tests/engine-batch-action.mjs`, `tests/engine-batch-100.mjs` |
 | Product UI and packaging | compare/batch/image-move cases in `tests/pdf-editor.spec.ts`, `tests/release-smoke.mjs`, `tests/package-smoke.mjs` |
 
 ## External Real-World Corpus Manifest
@@ -79,6 +79,25 @@ The surrogate files prove the corpus gate is executable and broad enough to
 exercise validators. They do **not** replace the required real-world/manual
 compatibility corpus because they are synthetic.
 
+## Representative Manual Viewer Package
+
+`npm run test:manual-smoke-package` generates a stable 50-PDF representative
+manual package under `tmp/manual-compatibility-package/`. It is synthetic, but
+it is broad enough to exercise the currently implemented product surfaces before
+real-world corpus acquisition is complete.
+
+`MANUAL_VIEWER_REQUIRE_PASS=1 npm run test:manual-viewer-smoke` opened that
+package in actual local app windows/tabs for Adobe Acrobat Pro/Reader, macOS
+Preview, Google Chrome, and Microsoft Edge. The 2026-05-06 run passed **200/200**
+open/render checks and wrote screenshot evidence to:
+
+```txt
+tmp/manual-viewer-smoke/2026-05-05T17-33-44-886Z/
+```
+
+This package contributes representative external viewer-smoke evidence. It does
+not close the real-world corpus acquisition gate by itself.
+
 Current planned manifest coverage:
 
 | Category | Planned Count | Status |
@@ -96,7 +115,7 @@ Current planned manifest coverage:
 | Government, contract, invoice, bank/tax forms | 15 | Pending acquisition/manual smoke |
 | Scanned Korean and English PDFs | 10 | Pending acquisition/manual smoke |
 | CJK, emoji, RTL text PDFs | 8 | Pending acquisition/manual smoke |
-| PDF/A/PDF/X/tagged/accessibility PDFs | 8 | Pending acquisition/manual smoke |
+| PDF/A/PDF/X/tagged/accessibility PDFs | 8 | PDF/X-3 generated fixup path covered locally; third-party PDF/A/PDF/X/tagged acquisition/manual smoke still pending |
 | Hidden-data, OCG, JS/action, embedded-file PDFs | 10 | Pending acquisition/manual smoke |
 | Malformed-but-openable and large 100/300/500/1000-page PDFs | 7 | Pending acquisition/manual smoke; generated 100/300/500/1000-page engine fixtures are covered by `tests/engine-large-document.mjs` |
 

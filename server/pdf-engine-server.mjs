@@ -64,6 +64,13 @@ const server = createServer(async (request, response) => {
       return;
     }
 
+    if (request.method === "POST" && request.url === "/api/pdf/preflight-fixup") {
+      const payload = await readJsonBody(request);
+      const result = await runEngine(["preflight-fixup", "--stdin", "--stdout"], payload);
+      sendJson(response, 200, result);
+      return;
+    }
+
     if (request.method === "POST" && request.url === "/api/pdf/compare") {
       const payload = await readJsonBody(request);
       const result = await runCompare(payload);

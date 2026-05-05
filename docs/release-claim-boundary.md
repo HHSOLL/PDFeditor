@@ -1,7 +1,7 @@
 # Release Claim Boundary
 
 This document defines what may and may not be said externally about the current
-PDFeditor build. It exists to prevent the automated 84/100 local baseline from
+PDFeditor build. It exists to prevent the automated 85/100 local baseline from
 being confused with a fully verified Acrobat Pro replacement claim.
 
 ## Allowed Claims
@@ -17,8 +17,9 @@ being confused with a fully verified Acrobat Pro replacement claim.
   order, and image alt text.
 - AcroForm filling/creation support for text, checkbox, radio, combo, list, and
   signature-field widgets.
-- Validator-backed report-only preflight with veraPDF PDF/A/PDF/UA validation
-  output when installed, plus PDF/X signal diagnostics.
+- Validator-backed preflight reporting with veraPDF PDF/A/PDF/UA validation
+  output when installed, PDF/X signal diagnostics, local PDF/X structural
+  validation, and Ghostscript-backed PDF/X-3 fixup evidence.
 - Hidden-info sanitizer coverage for generated fixtures.
 - Inspector compare report download and batch quick action backed by the engine,
   changed-region compare overlay and first-change navigation, persisted batch
@@ -27,7 +28,10 @@ being confused with a fully verified Acrobat Pro replacement claim.
   the output PDF.
 - Existing vector object selection and basic object inspector that export
   through `deleteVector`.
-- External replacement readiness: 82/100 verified as of 2026-05-05.
+- Representative Acrobat Pro/Reader, macOS Preview, Chrome, and Edge open/render
+  smoke for the 50-PDF manual package: 200/200 pass with screenshots under
+  `tmp/manual-viewer-smoke/2026-05-05T17-33-44-886Z/`.
+- External replacement readiness: 90/100 verified as of 2026-05-06.
 - Product-server release smoke verifies the built UI, engine health endpoint,
   OCR runtime, compare endpoint, and batch endpoint through
   `server/pdf-engine-server.mjs`.
@@ -39,22 +43,25 @@ being confused with a fully verified Acrobat Pro replacement claim.
 - 100% Acrobat-compatible.
 - External Acrobat Pro replacement score above 90.
 - Full PDF/A or PDF/X certification.
-- Preflight fixup engine.
+- Broad preflight fixup engine claims beyond the implemented PDF/X-3 path.
 - Full PDF/UA editor or validator.
 - LTV/timestamped enterprise signature support.
 - Complete sanitizer for all hidden PDF content.
 - Complete native vector editor.
 - Production-ready SaaS or native packaged desktop release.
-- Compatibility with Acrobat/Preview/Chrome/Edge unless the manual smoke report
-  contains completed app-specific pass records.
+- Deep feature-panel compatibility with Acrobat/Preview/Chrome/Edge beyond the
+  representative open/render smoke unless the manual smoke report contains
+  feature-specific pass records.
 - Treating the external corpus manifest as completed real-world corpus evidence
   before files or reproducible generation steps are attached.
 
 ## Current High-Risk Boundaries
 
-- **Manual viewer compatibility:** required app versions are detected locally,
-  but representative output PDFs still need explicit visual smoke in Acrobat,
-  Preview, Chrome, and Edge.
+- **Manual viewer compatibility:** representative 50-PDF open/render smoke is
+  complete in Acrobat, Preview, Chrome, and Edge. Deeper feature-panel smoke is
+  still required for scores above 90, including Acrobat signature status,
+  Acrobat Preflight comparison, form appearance details, sanitizer comparison,
+  OCR search/correction, and accessibility workflow checks.
 - **External corpus:** `tests/corpus/manifest.json` defines 117 planned external
   entries and `npm run test:corpus` now generates/validates 117 synthetic
   surrogate PDFs for drift prevention, but most real-world entries are still
@@ -63,9 +70,11 @@ being confused with a fully verified Acrobat Pro replacement claim.
   no native desktop app, hosted production deployment, queue, auth, audit log, or
   managed engine lifecycle.
 - **Preflight:** the current engine reports local signals and can include
-  veraPDF PDF/A/PDF/UA validation output. It does not certify that PDFeditor can
-  create PDF/A/X/UA-compliant output and does not apply fixups. PDF/X remains
-  signal-only until a PDF/X-capable validator or professional SDK path is added.
+  veraPDF PDF/A/PDF/UA validation output. PDF/X-3 fixup is implemented through
+  Ghostscript `pdfwrite` and accepted only after qpdf, PyMuPDF, and local PDF/X
+  structural validation pass. This does not certify arbitrary PDF/A/X/UA output,
+  does not cover PDF/A fixups, and does not provide Acrobat Pro output preview,
+  separations, ink coverage, or arbitrary PDF/X profile parity.
 - **Digital signatures:** CMS ByteRange signing and tamper detection work.
   Timestamp, LTV, revocation, and enterprise trust-chain UX are not included.
 - **OCR:** OCR can produce searchable PDFs and write corrected text. Full
@@ -80,7 +89,8 @@ Use:
 
 > Acrobat-class local PDF editor prototype with verified engine-backed OCR
 > correction, certificate signing, forms, sanitizer, preflight reporting,
-> compare/batch UI workflows, and an 82/100 external replacement readiness
+> PDF/X-3 fixup, compare/batch UI workflows, representative
+> Acrobat/Preview/Chrome/Edge viewer smoke, and a 90/100 external replacement readiness
 > score.
 
 Do not use:

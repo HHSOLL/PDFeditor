@@ -67,7 +67,9 @@ without broken layout or hidden stale data.
   thumbnails, and optional form-value reset.
 - Basic preflight report and report PDF for hidden data, page boxes, forms,
   fonts, images, drawings, annotations, widgets, PDF/A claim signals, and
-  OutputIntent diagnostics.
+  OutputIntent diagnostics. PDF/X-3 fixup is available through the engine and
+  accepted only when the rewritten PDF passes qpdf, PyMuPDF, and local PDF/X
+  structural validation.
 - Basic accessibility triage and repair for title/language, tag-structure
   signal, form fields, page text extraction, and image alt-text gaps.
 - Basic compare engine command and report PDF for page-count, text, and
@@ -87,7 +89,8 @@ without broken layout or hidden stale data.
 - Timestamped PAdES/LTV signing, revocation data, and enterprise trust stores.
 - XFA forms and advanced AcroForm scripts/calculations.
 - Full interconnected radio group authoring for newly created groups.
-- PDF/A/PDF/X preflight fixups.
+- PDF/A preflight fixups, arbitrary PDF/X profile fixups, and Acrobat Pro
+  print-production parity beyond the implemented PDF/X-3 fixup path.
 - Full optional-content artwork rewriting for complex hidden-layer page content.
 - Full PDF/UA accessibility validation, reading-order repair, and tag-tree editing.
 - Acrobat-style visual changed-area overlay UI and annotation/object diff.

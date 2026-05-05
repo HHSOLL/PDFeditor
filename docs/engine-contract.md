@@ -263,6 +263,7 @@ is the CLI form for encrypted output validation.
 
 - `validation`
 - `standardsValidation`
+- `pdfxValidation`
 - `warnings`
 - `pageCount`
 - `metadata`
@@ -295,11 +296,43 @@ available on `PATH` or through `VERAPDF_BIN`; it reports validator version,
 profile name, pass/fail status, failed check counts, and summarized failures.
 When `REQUIRE_STANDARDS_VALIDATOR=1`, missing veraPDF is a preflight blocker.
 PDF/A/PDF/UA validator output is report evidence, not a claim that PDFeditor can
-create certified output. PDF/X remains signal-only until a PDF/X-capable
-validator or professional SDK is added.
+create certified output. `pdfxValidation` is a local structural validator for
+PDF/X candidates: it checks the PDF/X claim, `/OutputIntent` with `/S /GTS_PDFX`,
+`/Trapped`, page TrimBox/ArtBox presence, embedded fonts, transparency signals,
+and interactive action signals.
 
 `pdf_engine.py preflight --input file.pdf --report report.pdf` writes a
 human-readable report PDF that mirrors the JSON warnings and metrics.
+
+## Preflight Fixup Response
+
+`/api/pdf/preflight-fixup` and
+`pdf_engine.py preflight-fixup --target pdfx-3` run a destructive standards
+fixup that rewrites a new PDF with Ghostscript `pdfwrite`.
+
+The supported target is currently `pdfx-3`, producing a PDF/X-3:2002 candidate
+with:
+
+- Ghostscript `-dPDFX=3`
+- CMYK `ColorConversionStrategy`
+- embedded fonts
+- generated PDF/X definition file
+- CMYK ICC OutputIntent
+- post-fixup qpdf/PyMuPDF validation
+- post-fixup `pdfxValidation`
+
+The response shape is:
+
+- `ok`
+- `pdfBase64`
+- `report.fixup`
+- `report.before.validation`
+- `report.before.pdfxValidation`
+- `report.after.validation`
+- `report.after.pdfxValidation`
+
+This is a claimable engine-backed PDF/X-3 fixup path, not full Acrobat Pro
+print-production parity and not certification for every PDF/X profile.
 
 ## Accessibility Report
 

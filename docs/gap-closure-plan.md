@@ -12,8 +12,8 @@ tests, and manual compatibility evidence is recorded where required.
 
 | Metric | Current Value | Claim Status |
 | --- | ---: | --- |
-| Local automated baseline | 84 / 100 | Verified by local automated tests |
-| External replacement readiness | 82 / 100 | Verified but below 90+ claim gate |
+| Local automated baseline | 85 / 100 | Verified by local automated tests |
+| External replacement readiness | 90 / 100 | Verified at the 90-point representative viewer-smoke gate |
 | Full Acrobat Pro replacement | 0 / 1 | Not claimable |
 | Production-ready SaaS/native release | 0 / 1 | Not claimable |
 
@@ -21,7 +21,8 @@ Safe current wording remains:
 
 > Acrobat-class local PDF editor prototype with verified engine-backed OCR
 > correction, certificate signing, forms, sanitizer, preflight reporting,
-> compare/batch UI workflows, and an 82/100 external replacement readiness
+> PDF/X-3 fixup, compare/batch UI workflows, representative
+> Acrobat/Preview/Chrome/Edge viewer smoke, and a 90/100 external replacement readiness
 > score.
 
 ## Completion Rules
@@ -30,8 +31,9 @@ Safe current wording remains:
   manual smoke where required.
 - Do not count overlay-only UI as PDF editing.
 - Do not count screenshot/raster export as PDF editing.
-- Do not claim Acrobat/Preview/Chrome/Edge compatibility without app-specific
-  manual records in `docs/manual-compatibility-report.md`.
+- Do not claim Acrobat/Preview/Chrome/Edge compatibility beyond the completed
+  representative open/render smoke without feature-specific manual records in
+  `docs/manual-compatibility-report.md`.
 - Do not claim PDF/A, PDF/X, or PDF/UA certification without validator-backed
   passing/failing fixtures and Acrobat comparison evidence. veraPDF report
   output is validation evidence, not certified-output evidence.
@@ -42,7 +44,7 @@ Safe current wording remains:
 
 | Phase | Gap | Owner Files | Required Tests | Manual Smoke | UI Needed | Engine Needed | Deployment Needed | Completion Evidence | Current Status |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| 1 | Acrobat/Preview/Chrome/Edge visual smoke | `docs/manual-compatibility-report.md`, `tmp/manual-smoke-*` | `npm run test:release-smoke`, `npm run test:package-smoke` | Yes, 50+ representative PDFs | No new UI | No | No | Pass/fail rows with viewer versions and screenshots | Pending |
+| 1 | Acrobat/Preview/Chrome/Edge visual smoke | `docs/manual-compatibility-report.md`, `tmp/manual-viewer-smoke/*` | `npm run test:manual-viewer-smoke`, `npm run test:release-smoke`, `npm run test:package-smoke` | Yes, 50 representative PDFs | No new UI | No | No | 200/200 pass rows with viewer versions and screenshots | Completed for representative open/render smoke; feature-panel smoke still needed above 90 |
 | 2 | Real-world corpus 100+ | `tests/corpus/manifest.json`, `tests/corpus-smoke.mjs`, `docs/corpus-coverage.md` | `npm run test:corpus` | Representative subset | No | Generated corpus validation | No | Manifest with 100+ planned entries plus generated 100-PDF smoke | Manifest gate added; acquisition pending |
 | 3 | Viewer performance at 1000 pages | `src/main.ts`, `src/styles.css`, `tests/pdf-editor.spec.ts`, `tests/engine-large-document.mjs` | large-document E2E/engine metrics | Chrome/Edge visual smoke | Existing | No | No | first-page visible time, canvas count, freeze check | 100/300/500/1000 engine fixtures verified; browser memory/manual smoke still partial |
 | 4 | Semantic reflow for multi-column/table/RTL/emoji | `src/main.ts`, `engine/pdf_engine.py`, `tests/engine-reflow*.mjs` | reflow multicolumn/table/CJK/RTL tests | Acrobat/Preview/Chrome | Existing | Yes | No | searchable output, no figure/table overlap, raw source removal | Partial |
@@ -53,7 +55,7 @@ Safe current wording remains:
 | 9 | Signature trust, timestamp, LTV | `engine/pdf_engine.py`, `src/main.ts`, `tests/engine-digital-signature*.mjs` | timestamp/trust boundary/password tests | Acrobat signature panel | Yes | Yes | No | Acrobat recognizes signature status; tamper invalidates | Partial; timestamp/LTV missing |
 | 10 | OCR scanned editing completeness | `engine/pdf_engine.py`, `src/main.ts`, `tests/engine-ocr*.mjs` | deskew/orientation/correction UI tests | Acrobat/Preview/Chrome search | Yes | Yes | Optional queue | corrected invisible text layer extractable | Partial |
 | 11 | Full sanitizer claim | `engine/pdf_engine.py`, `tests/engine-sanitizer*.mjs` | RichMedia/OCG/obscured/xref tests | Acrobat Pro sanitizer comparison | Existing | Yes | No | no secrets in text/raw/xref/unreferenced scans | Partial; full claim blocked |
-| 12 | PDF/A/UA validator-backed preflight | `engine/pdf_engine.py`, `docs/pdfa-pdfx-engine-evaluation.md`, `tests/engine-preflight*.mjs` | `engine-standards-validator.mjs` with veraPDF | Acrobat Preflight comparison | Existing | PDF/X validator/fixup engine still needed | No | validator-backed report/fixups | PDF/A/UA report path implemented; fixups/PDF/X blocked |
+| 12 | PDF/A/UA validator-backed preflight and PDF/X-3 fixup | `engine/pdf_engine.py`, `docs/pdfa-pdfx-engine-evaluation.md`, `tests/engine-preflight*.mjs` | `engine-standards-validator.mjs` with veraPDF, `engine-pdfx-validation.mjs`, `engine-preflight-fixup.mjs` | Acrobat Preflight comparison | Existing | PDF/X-3 fixup implemented; broader validators still needed | No | validator-backed report plus Ghostscript PDF/X-3 fixup | PDF/A/UA report path and PDF/X-3 fixup implemented; PDF/A fixups/arbitrary PDF/X profiles still blocked |
 | 13 | PDF/UA accessibility workflow | `engine/pdf_engine.py`, `src/main.ts`, `tests/engine-accessibility*.mjs` | tag tree/reading order/PDF-UA report tests | Acrobat accessibility panel | Yes | Validator needed | No | tagged PDF save and validator report | Basic only |
 | 14 | Compare/batch full workflow | `src/main.ts`, `server/pdf-engine-server.mjs`, `tests/engine-batch*.mjs` | compare object/annotation diff, batch worker tests | Report PDF visual smoke | Yes | Yes | Worker needed | action builder, logs, failure report | Partial |
 | 15 | Production or desktop packaging | `scripts/package-local.mjs`, `server/pdf-engine-server.mjs`, `docs/deployment.md` | package/deployment/job/storage smoke | User launch smoke | Yes | Lifecycle automation | Yes | dev-server-free execution with logs/recovery | Local web package has launcher, manifest, logs, support bundle; native/hosted release still blocked |
@@ -61,13 +63,14 @@ Safe current wording remains:
 
 ## Immediate Closure Order
 
-1. Complete manual compatibility records for the already generated OCR,
-   signature, accessibility, form, sanitizer, preflight, compare, batch, image,
-   vector, text edit, and page organization outputs.
+1. Complete deeper feature-panel manual compatibility records for signature
+   status, Acrobat Preflight comparison, form appearance details, sanitizer
+   comparison, OCR search/correction, and accessibility workflow checks.
 2. Acquire or reproducibly generate the external corpus entries described in
    `tests/corpus/manifest.json`.
-3. Extend the implemented veraPDF report path with PDF/X-capable validation and
-   professional fixup evidence before changing certification language.
+3. Extend the implemented veraPDF report path and PDF/X-3 fixup into broader
+   professional preflight evidence: PDF/A fixups, arbitrary PDF/X profiles,
+   output preview/separations/ink coverage, and Acrobat Preflight comparison.
 4. Build a managed desktop or production web package with engine lifecycle,
    logs, and failure recovery.
 5. Expand object editing, semantic reflow, annotations, forms, sanitizer, OCR,
@@ -90,6 +93,10 @@ Safe current wording remains:
 - `tests/manual-smoke-package.mjs` builds a validated 50-PDF package and
   checklist under `tmp/manual-compatibility-package/` so Phase 1 manual smoke has
   stable input files instead of ad hoc PDFs.
+- `tests/manual-viewer-smoke.mjs` opens that package in actual Acrobat
+  Pro/Reader, macOS Preview, Chrome, and Edge app windows/tabs and records
+  screenshot evidence. The 2026-05-06 run passed 200/200 checks under
+  `tmp/manual-viewer-smoke/2026-05-05T17-33-44-886Z/`.
 - `tests/engine-large-document.mjs` now validates 100, 300, 500, and 1000-page
   fixtures and writes timing metrics to `tmp/engine-large-document/metrics.json`.
 - `scripts/package-local.mjs` now emits a local release manifest, runtime log
@@ -99,11 +106,13 @@ Safe current wording remains:
   real vector box at the edited bbox, so moving detected vector objects is no
   longer overlay-only. Exact source path preservation and full stroke/fill UI
   remain blocked.
-- `docs/pdfa-pdfx-engine-evaluation.md` records the validator path.
-  `tests/standards-validator-boundary.mjs` keeps PDF/A, PDF/X, PDF/UA, and
-  preflight fixup claims blocked unless validator-backed report evidence exists.
-  `tests/engine-standards-validator.mjs` now proves the veraPDF JSON report path
-  and missing-validator failure policy.
+- `docs/pdfa-pdfx-engine-evaluation.md` records the validator and PDF/X-3 fixup
+  paths. `tests/standards-validator-boundary.mjs` keeps PDF/A, broad PDF/X,
+  PDF/UA, and broad preflight fixup claims blocked unless validator-backed
+  evidence exists. `tests/engine-standards-validator.mjs` proves the veraPDF JSON
+  report path and missing-validator failure policy; `tests/engine-pdfx-validation.mjs`
+  and `tests/engine-preflight-fixup.mjs` prove the Ghostscript-backed PDF/X-3
+  fixup path.
 
 ## Non-Claimable Boundaries
 
@@ -112,7 +121,7 @@ These remain non-claimable until closed with evidence:
 - Full Acrobat Pro replacement.
 - External replacement readiness above 90.
 - Production-ready SaaS or native desktop release.
-- PDF/A, PDF/X, or PDF/UA certification.
+- PDF/A, arbitrary PDF/X, or PDF/UA certification.
 - LTV/timestamp enterprise digital signatures.
 - Complete sanitizer for all hidden PDF content.
 - Complete native vector editor.

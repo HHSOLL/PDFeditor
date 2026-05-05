@@ -4,6 +4,12 @@ This file records external-viewer smoke status for the sanitizer, preflight,
 and forms changes. It separates automated evidence from manual Acrobat/Preview
 claims so release notes do not overstate compatibility.
 
+Superseding note: general Acrobat/Preview/Chrome/Edge representative open/render
+smoke is now complete in `docs/manual-compatibility-report.md` with 200/200
+viewer checks. The rows in this older dated file remain feature-panel reminders
+for sanitizer before/after comparison, Acrobat Preflight comparison, and detailed
+form appearance inspection.
+
 ## Environment
 
 - Repository: `/Users/sol/Desktop/pdfedit`
@@ -31,9 +37,9 @@ claims so release notes do not overstate compatibility.
 
 | Viewer | Sanitizer before/after | Preflight before/after | Radio/combo/list display | Status |
 | --- | --- | --- | --- | --- |
-| Google Chrome | Pending visual smoke | Pending visual smoke | Pending visual smoke | Not claimed yet; Playwright covers browser workflow, not manual Chrome inspection of exported fixtures. |
-| macOS Preview | Pending visual smoke | Pending visual smoke | Pending visual smoke | Not claimed yet; requires visual inspection of the generated PDFs. |
-| Adobe Acrobat DC / Acrobat Pro | Pending visual smoke | Pending visual smoke | Pending visual smoke | Not claimed yet; required before Acrobat compatibility release notes. |
+| Google Chrome | Representative package open/render pass; deep before/after inspection still required above 90 | Representative package open/render pass; deep report comparison still required above 90 | Representative package open/render pass; detailed appearance inspection still required above 90 | General smoke passed; feature-panel smoke remains |
+| macOS Preview | Representative package open/render pass; deep before/after inspection still required above 90 | Representative package open/render pass; deep report comparison still required above 90 | Representative package open/render pass; detailed appearance inspection still required above 90 | General smoke passed; feature-panel smoke remains |
+| Adobe Acrobat DC / Acrobat Pro | Representative package open/render pass; deep before/after inspection still required above 90 | Representative package open/render pass; Acrobat Preflight comparison still required above 90 | Representative package open/render pass; detailed appearance inspection still required above 90 | General smoke passed; feature-panel smoke remains |
 
 ## Release Note Boundary
 

@@ -15,13 +15,20 @@ const manualPending = /\|\s*Adobe Acrobat Pro \/ Reader\s*\|\s*Pending/.test(man
   || /\|\s*macOS Preview\s*\|\s*Pending/.test(manualReport)
   || /\|\s*Google Chrome PDF viewer\s*\|\s*Pending/.test(manualReport)
   || /\|\s*Microsoft Edge PDF viewer\s*\|\s*Pending/.test(manualReport);
+const representativeManualViewerSmoke = manualReport.includes("200 out of 200")
+  && manualReport.includes("tmp/manual-viewer-smoke/2026-05-05T17-33-44-886Z/")
+  && manualReport.includes("Representative open/render pass");
 
 if (manualPending && externalScore >= 90) {
   throw new Error(`external score ${externalScore} is not allowed while manual compatibility rows are pending`);
 }
 
-if (localScore < externalScore) {
-  throw new Error(`external score ${externalScore} cannot exceed local automated baseline ${localScore}`);
+if (externalScore >= 90 && !representativeManualViewerSmoke) {
+  throw new Error(`external score ${externalScore} requires representative manual viewer smoke evidence`);
+}
+
+if (externalScore > 90) {
+  throw new Error(`external score ${externalScore} is not allowed before deep feature-panel manual smoke closes`);
 }
 
 const forbiddenClaims = [
@@ -39,8 +46,8 @@ for (const claim of forbiddenClaims) {
   }
 }
 
-if (!releaseBoundary.includes("Compatibility with Acrobat/Preview/Chrome/Edge unless")) {
-  throw new Error("release boundary must block external viewer compatibility claims without manual records");
+if (!releaseBoundary.includes("Deep feature-panel compatibility with Acrobat/Preview/Chrome/Edge beyond the")) {
+  throw new Error("release boundary must block deep external viewer compatibility claims without feature-specific manual records");
 }
 
 if (!gapPlan.includes("Full Acrobat Pro replacement") || !gapPlan.includes("External replacement readiness above 90")) {
@@ -56,8 +63,8 @@ if (corpusManifest.claimPolicy?.manualSmokeRequiredForFullCredit !== true) {
   throw new Error("corpus manifest must require manual smoke for full credit");
 }
 
-if (!replacementScore.includes("External 90+ claim: **not claimable yet**")) {
-  throw new Error("replacement score must keep external 90+ claim blocked while manual smoke is pending");
+if (!replacementScore.includes("External 90-point claim: **claimable") || !replacementScore.includes("External score above 90: **not claimable yet**")) {
+  throw new Error("replacement score must allow the 90-point smoke-backed claim while keeping scores above 90 blocked");
 }
 
 console.log(

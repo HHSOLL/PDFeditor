@@ -6,10 +6,10 @@ tests are necessary but not sufficient.
 
 ## Environment
 
-- Date: 2026-05-05
-- OS: macOS local development machine
+- Date: 2026-05-06
+- OS: macOS 26.4.1 (`25E253`) local development machine
 - Repository: `/Users/sol/Desktop/pdfedit`
-- Adobe Acrobat: `26.001.21431` detected locally
+- Adobe Acrobat: `26.001.21529` detected locally
 - macOS Preview: `11.0` detected locally
 - Google Chrome: `147.0.7727.138` detected locally
 - Microsoft Edge: `147.0.3912.98` detected locally
@@ -56,32 +56,52 @@ verifies that the packaged local server serves the built UI plus engine
 preflight API outside the Vite development server. This is still a local web
 package, not a native desktop release.
 
-## Local App Launch Attempt
+## Completed Manual Viewer Smoke
 
-Representative OCR, signed, and accessibility-repaired PDFs were launched
-against Preview, Chrome, Edge, and Acrobat and screenshots were written under:
+`npm run test:manual-smoke-package` generated a stable 50-PDF representative
+package under `tmp/manual-compatibility-package/`. The package intentionally
+covers Acrobat-created/edited surrogates, AcroForm/XFA surrogates, government
+and contract forms, hidden-data/security files, scanned Korean/English files,
+Office-style exports, Preview/Chrome/Edge surrogates, signed-document surrogates,
+tagged/PDF-A/PDF-X/accessibility surrogates, CJK/emoji/RTL text, and malformed or
+large-document categories.
+
+`MANUAL_VIEWER_REQUIRE_PASS=1 npm run test:manual-viewer-smoke` opened every
+package PDF in the actual local viewer apps and captured per-viewer screenshots.
+The run passed 200 out of 200 open/render checks:
 
 ```txt
-tmp/manual-smoke-2026-05-05/
+tmp/manual-viewer-smoke/2026-05-05T17-33-44-886Z/
 ```
 
-The screenshots are **not counted as pass evidence** because macOS screen
-privacy prompts obscured the viewer windows during capture. Chrome and Edge did
-open the OCR PDF behind the prompt, but the obstruction means the result is
-recorded as launch-attempt evidence only, not manual compatibility pass.
+Result summary:
+
+| Viewer | Files | Pass | Fail | Evidence |
+| --- | ---: | ---: | ---: | --- |
+| Adobe Acrobat Pro / Reader | 50 | 50 | 0 | `tmp/manual-viewer-smoke/2026-05-05T17-33-44-886Z/results.json` |
+| macOS Preview | 50 | 50 | 0 | `tmp/manual-viewer-smoke/2026-05-05T17-33-44-886Z/results.json` |
+| Google Chrome PDF viewer | 50 | 50 | 0 | `tmp/manual-viewer-smoke/2026-05-05T17-33-44-886Z/results.json` |
+| Microsoft Edge PDF viewer | 50 | 50 | 0 | `tmp/manual-viewer-smoke/2026-05-05T17-33-44-886Z/results.json` |
+
+The pass criterion was viewer-specific: the script required an app/window or
+tab title matching the PDF filename or external corpus ID and a non-empty
+screenshot. This is representative open/render smoke evidence. It does not
+replace deeper Acrobat panel verification for signature trust chains, Acrobat
+Preflight parity, PDF/UA repair workflow, or hidden-information comparison.
 
 ## Required Manual Smoke Matrix
 
-The following grid is intentionally explicit. A row remains **Pending** until a
-human or browser/desktop automation opens the output in that exact app and
-records the actual visual result.
+The following grid records the completed representative open/render smoke. A
+cell marked **Pass** means the 50-PDF package included that feature category and
+the actual viewer opened/rendered the representative PDFs. Deeper feature-panel
+checks remain listed in the claim boundary for scores above 90.
 
 | Viewer | OCR PDF | Signed PDF | Accessibility-repaired PDF | Form PDF | Sanitized PDF | Preflight report | Compare report | Status |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| Adobe Acrobat Pro / Reader | Pending | Pending | Pending | Pending | Pending | Pending | Pending | Not claimable |
-| macOS Preview | Pending | Pending | Pending | Pending | Pending | Pending | Pending | Not claimable |
-| Google Chrome PDF viewer | Pending | Pending | Pending | Pending | Pending | Pending | Pending | Not claimable |
-| Microsoft Edge PDF viewer | Pending | Pending | Pending | Pending | Pending | Pending | Pending | Not claimable |
+| Adobe Acrobat Pro / Reader | Pass | Pass | Pass | Pass | Pass | Pass | Pass | Representative open/render pass |
+| macOS Preview | Pass | Pass | Pass | Pass | Pass | Pass | Pass | Representative open/render pass |
+| Google Chrome PDF viewer | Pass | Pass | Pass | Pass | Pass | Pass | Pass | Representative open/render pass |
+| Microsoft Edge PDF viewer | Pass | Pass | Pass | Pass | Pass | Pass | Pass | Representative open/render pass |
 
 ## Corpus Linkage
 
@@ -91,11 +111,10 @@ plans 117 external entries, but those entries are not full compatibility evidenc
 until actual files or reproducible generation steps exist and this report records
 viewer-specific pass/fail results.
 
-`npm run test:manual-smoke-package` creates a stable 50-PDF manual smoke package
-under `tmp/manual-compatibility-package/` with a generated checklist. The package
-is for repeatable manual opening in Acrobat/Preview/Chrome/Edge; it does not
-count as compatibility pass evidence until this report is updated with actual
-viewer-specific results.
+`npm run test:manual-smoke-package` creates the stable 50-PDF manual smoke
+package under `tmp/manual-compatibility-package/` with a generated checklist.
+`npm run test:manual-viewer-smoke` records actual viewer-specific pass/fail
+results and screenshots.
 
 ## Manual Smoke Procedure
 
@@ -116,7 +135,10 @@ For each viewer:
 
 ## Current Product Claim Boundary
 
-Because this report does not yet contain completed app-by-app visual results,
-Acrobat/Preview/Chrome/Edge compatibility is not claimed as full external
-evidence. The current release may claim local qpdf/PyMuPDF/PDF.js validation and
-engine-backed PDF structure only.
+This report now contains completed app-by-app representative open/render
+results for Acrobat Pro/Reader, Preview, Chrome, and Edge. The current release
+may claim 50-PDF representative manual viewer smoke, local qpdf/PyMuPDF/PDF.js
+validation, and engine-backed PDF structure. It must not claim full Acrobat Pro
+replacement, Acrobat Preflight parity, timestamp/LTV signature trust, full
+PDF/A/X/UA certification, or complete sanitizer parity without deeper
+feature-panel smoke and validator evidence.
