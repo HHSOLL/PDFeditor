@@ -78,6 +78,8 @@ import type {
 
 pdfjs.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
 const editorFontUrl = "/fonts/AppleGothic.ttf";
+const transparentSelectionImageDataUrl =
+  "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==";
 
 const appRoot = requireAppRoot();
 
@@ -1244,10 +1246,14 @@ function renderAnnotation(annotation: Annotation, metrics: PageMetrics): Element
       node.textContent = annotation.text;
     }
   } else if (annotation.type === "image") {
-    const img = document.createElement("img");
-    img.src = annotation.dataUrl;
-    img.alt = "";
-    node.append(img);
+    if (annotation.sourceImageId && annotation.dataUrl === transparentSelectionImageDataUrl) {
+      node.classList.add("source-object-edit");
+    } else {
+      const img = document.createElement("img");
+      img.src = annotation.dataUrl;
+      img.alt = "";
+      node.append(img);
+    }
   } else {
     node.style.background = annotation.type === "rect" ? "transparent" : annotation.color;
     node.style.opacity = `${annotation.opacity}`;
@@ -1484,12 +1490,12 @@ function renderSourceImageItem(item: SourceImageItem, metrics: PageMetrics): HTM
   const button = document.createElement("button");
   button.type = "button";
   button.className = "source-image";
-  button.ariaLabel = "기존 PDF 이미지 삭제 대상으로 선택";
+  button.ariaLabel = "기존 PDF 이미지 선택";
   button.style.left = `${item.x * metrics.width}px`;
   button.style.top = `${item.y * metrics.height}px`;
   button.style.width = `${item.width * metrics.width}px`;
   button.style.height = `${item.height * metrics.height}px`;
-  button.title = "기존 PDF 이미지 삭제";
+  button.title = "기존 PDF 이미지 선택";
   button.addEventListener("pointerdown", (event) => {
     if (currentTool !== "select") {
       return;
@@ -1498,7 +1504,7 @@ function renderSourceImageItem(item: SourceImageItem, metrics: PageMetrics): HTM
     currentPageId = item.pageId;
     setActivePageMetrics(item.pageId);
     updateCurrentPageIndicators();
-    convertSourceImageToRedaction(item);
+    convertSourceImageToAnnotation(item);
   });
   return button;
 }
@@ -2741,7 +2747,7 @@ function mergeLinesIntoBlocks(lines: SourceTextItem[]): SourceTextItem[] {
     if (previous && shouldMergeLineIntoBlock(previous, line)) {
       const right = Math.max(previous.x + previous.width, line.x + line.width);
       const bottom = Math.max(previous.y + previous.height, line.y + line.height);
-      previous.text = `${previous.text}\n${line.text}`;
+      previous.text = `${previous.text}${lineSeparatorBetween(previous, line)}${line.text}`;
       previous.x = Math.min(previous.x, line.x);
       previous.y = Math.min(previous.y, line.y);
       previous.width = right - previous.x;
@@ -2786,11 +2792,35 @@ function weightedFontSize(block: SourceTextItem, line: SourceTextItem): number {
   return (block.fontSize * block.lineCount + line.fontSize) / totalLines;
 }
 
+function lineSeparatorBetween(block: SourceTextItem, line: SourceTextItem): string {
+  const verticalGap = line.y - (block.y + block.height);
+  const paragraphGap = verticalGap > Math.max(block.height, line.height) * 0.55;
+  if (paragraphGap) {
+    return "\n\n";
+  }
+  return needsSpaceBetween(block.text, line.text) ? " " : "";
+}
+
 function needsSpaceBetween(left: string, right: string): boolean {
   if (!left || !right) {
     return false;
   }
-  return /[A-Za-z0-9)]$/.test(left) && /^[A-Za-z0-9(]/.test(right);
+  const leftChar = left.trimEnd().slice(-1);
+  const rightChar = right.trimStart().slice(0, 1);
+  if (!leftChar || !rightChar) {
+    return false;
+  }
+  if (/[\s([{]$/.test(leftChar) || /^[\s.,;:!?)]/.test(rightChar)) {
+    return false;
+  }
+  if (isCjkCharacter(leftChar) || isCjkCharacter(rightChar)) {
+    return false;
+  }
+  return true;
+}
+
+function isCjkCharacter(value: string): boolean {
+  return /[\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af]/u.test(value);
 }
 
 function isSourceTextAlreadyEdited(sourceTextId: string): boolean {
@@ -2883,23 +2913,27 @@ function sourceTextToAnnotation(sourceText: SourceTextItem): TextAnnotation {
   };
 }
 
-function convertSourceImageToRedaction(item: SourceImageItem): void {
-  if (isSourceImageAlreadyEdited(item.id)) {
+function convertSourceImageToAnnotation(item: SourceImageItem): void {
+  const existing = annotations.find((annotation) => annotation.sourceImageId === item.id);
+  if (existing) {
+    selectedId = existing.id;
+    renderInspector();
+    renderCurrentLayer();
     return;
   }
-  const annotation: BoxAnnotation = {
+  const annotation: ImageAnnotation = {
     id: crypto.randomUUID(),
     pageId: item.pageId,
-    type: "redact",
+    type: "image",
     x: item.x,
     y: item.y,
     width: item.width,
     height: item.height,
-    color: "#ffffff",
+    color: "#176b58",
     opacity: 1,
     strokeWidth: 1,
+    dataUrl: transparentSelectionImageDataUrl,
     sourceImageId: item.id,
-    dirty: true,
   };
   annotations.push(annotation);
   selectedId = annotation.id;
@@ -3262,7 +3296,7 @@ function renderInspector(): void {
     </div>
     ${selected.type !== "pen" ? sizeFields(selected) : ""}
     <div class="mini-actions">
-      <button id="duplicateSelected" type="button">복제</button>
+      <button id="duplicateSelected" type="button"${selected.sourceImageId && selected.type === "image" ? ' disabled title="기존 PDF 이미지는 먼저 이동/교체 편집으로 확정한 뒤 복제할 수 있습니다."' : ""}>복제</button>
       <button id="deleteSelected" type="button">삭제</button>
     </div>
   `;
@@ -3485,9 +3519,11 @@ function renderSourceObjectInspector(annotation: Annotation): string {
   }
   const kind = sourceImage ? "Image XObject" : "Vector drawing";
   const action = sourceImage
-    ? rectChangedFromSourceImage(annotation, sourceImage)
+    ? annotation.type === "redact"
+      ? "deleteImage로 원본 이미지 객체 제거"
+      : rectChangedFromSourceImage(annotation, sourceImage)
       ? "moveImage로 원본 이미지 제거 후 새 위치에 재삽입"
-      : "deleteImage로 원본 이미지 객체 제거"
+      : "선택만 됨 - 저장 시 원본 이미지를 변경하지 않음"
     : sourceVector && rectChangedFromSourceVector(annotation, sourceVector)
       ? "moveVector로 원본 벡터 제거 후 새 위치에 벡터 박스 재삽입"
       : "deleteVector로 닿은 벡터 라인아트 제거";
@@ -4011,6 +4047,10 @@ function duplicateSelected(): void {
   if (!selected) {
     return;
   }
+  if (selected.sourceImageId && selected.type === "image") {
+    showToast("기존 PDF 이미지는 선택만으로 복제하지 않습니다. 이동/교체 편집 후 새 이미지로 복제하세요.");
+    return;
+  }
   const copy = cloneAnnotation(selected);
   copy.id = crypto.randomUUID();
   if (copy.type === "text") {
@@ -4035,6 +4075,21 @@ function deleteSelected(): void {
     return;
   }
   const selected = selectedAnnotation();
+  if (selected?.sourceImageId && selected.type === "image") {
+    const deletion: BoxAnnotation = {
+      ...selected,
+      type: "redact",
+      color: "#ffffff",
+      opacity: 1,
+      strokeWidth: 1,
+      dirty: true,
+    };
+    annotations = annotations.map((annotation) => (annotation.id === selected.id ? deletion : annotation));
+    commitHistory();
+    renderInspector();
+    renderCurrentLayer();
+    return;
+  }
   if (selected?.sourceAnnotationId) {
     deletedSourceAnnotations.push(sourceAnnotationRef(selected));
   }
@@ -4661,7 +4716,8 @@ function requiresPdfEngineForSafeExport(): boolean {
     deletedSourceAnnotations.length > 0 ||
     annotations.some((annotation) => {
       if (annotation.sourceImageId) {
-        return true;
+        const sourceImage = sourceImageItemById(annotation.sourceImageId);
+        return annotation.type === "redact" || !sourceImage || rectChangedFromSourceImage(annotation, sourceImage);
       }
       if (annotation.sourceVectorId) {
         return true;
@@ -4904,6 +4960,24 @@ function annotationToEngineOperation(annotation: Annotation, pageIndex: number):
       type: "deleteImage",
       sourceImageId: sourceImage?.sourceImageId ?? annotation.sourceImageId,
     };
+  }
+
+  if (annotation.sourceImageId && annotation.type === "image") {
+    const sourceImage = sourceImageItemById(annotation.sourceImageId);
+    if (sourceImage && rectChangedFromSourceImage(annotation, sourceImage)) {
+      return {
+        ...base,
+        type: "moveImage",
+        sourceImageId: sourceImage.sourceImageId,
+        eraseOriginal: {
+          x: sourceImage.x,
+          y: sourceImage.y,
+          width: sourceImage.width,
+          height: sourceImage.height,
+        },
+      };
+    }
+    return null;
   }
 
   if (annotation.sourceVectorId && annotation.type === "redact") {

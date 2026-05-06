@@ -479,6 +479,63 @@ export interface OcrStatus {
   errors: string[];
 }
 
+export interface PdfProviderConfiguration {
+  source?: string;
+  providerEnv?: string;
+  moduleEnv?: string;
+  licenseKeyEnv?: string;
+  licenseFileEnv?: string;
+  provider?: string;
+  module?: string;
+  licenseConfigured?: boolean;
+}
+
+export interface PdfProviderStatusItem {
+  id: "pymupdf" | "commercial" | string;
+  name: string;
+  label?: string;
+  available: boolean;
+  active: boolean;
+  configured: boolean;
+  sdkLoaded: boolean;
+  version: string;
+  capabilities: string[];
+  capabilityDetails?: PdfProviderCapability[];
+  unavailableReason: string;
+  reason?: string;
+  configuration: PdfProviderConfiguration;
+}
+
+export interface PdfProviderCapability {
+  id: string;
+  label: string;
+  status: string;
+  source: string;
+  claimable: boolean;
+  reason: string;
+  evidence: string[];
+}
+
+export interface PdfProviderClaimBlocker {
+  id: string;
+  reason: string;
+  requiredFor: string;
+}
+
+export interface PdfProviderStatus {
+  ok: boolean;
+  activeProvider: string;
+  providers: PdfProviderStatusItem[];
+  warnings: string[];
+  capabilities?: Record<string, PdfProviderCapability>;
+  claimGate100?: {
+    ready: boolean;
+    blockers: PdfProviderClaimBlocker[];
+    policy: string;
+  };
+  environment?: Record<string, string>;
+}
+
 export interface OcrRequest {
   bytes: Uint8Array;
   password?: string;

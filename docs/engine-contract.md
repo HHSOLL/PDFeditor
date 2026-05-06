@@ -97,6 +97,33 @@ feature is real.
   PDF/UA repair, PDF/A/X preflight fixups, interactive visual compare overlays,
   and production action queues remain engine gaps.
 
+## Provider And Commercial SDK Adapter
+
+`pdf_engine.py provider-status --stdout` and
+`GET /api/pdf/provider-status` expose the active engine provider and the final
+100-point claim gate. PyMuPDF remains the default provider. The commercial
+provider is intentionally disabled unless the runtime is configured with a
+licensed SDK adapter:
+
+```txt
+PDFEDITOR_COMMERCIAL_ENABLED=1
+PDFEDITOR_COMMERCIAL_SDK=<Apryse|Foxit|Nutrient|callas|other>
+PDFEDITOR_COMMERCIAL_SDK_PATH=<sdk path>
+PDFEDITOR_COMMERCIAL_LICENSE=<license token or path>
+```
+
+Compatibility environment names are also recognized for SDK-module probes:
+`PDF_ENGINE_COMMERCIAL_PROVIDER`, `PDF_ENGINE_COMMERCIAL_SDK_MODULE`,
+`PDF_ENGINE_COMMERCIAL_LICENSE_KEY`, and
+`PDF_ENGINE_COMMERCIAL_LICENSE_FILE`.
+
+The provider response includes `claimGate100.ready`. It must stay `false`
+until the commercial/native object editing path, standards validators,
+timestamp/LTV signatures, full sanitizer proof, desktop release smoke,
+real-world corpus, and deep manual viewer smoke all report claimable evidence.
+Unsupported SDK-backed buttons must be hidden or disabled with the provider
+reason rather than exposed as inert UI.
+
 ## Page Organization Operations
 
 The `pages` array is the primary page-order contract. Existing pages are copied

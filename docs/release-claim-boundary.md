@@ -36,10 +36,15 @@ being confused with a fully verified Acrobat Pro replacement claim.
   OCR runtime, compare endpoint, and batch endpoint through
   `server/pdf-engine-server.mjs`.
 - Local release package smoke verifies `release/pdfeditor-local`.
+- Basic source editing integrity is covered by regression tests: source
+  paragraph soft wraps remain one editable paragraph, and selecting an existing
+  PDF image is non-destructive until the user explicitly moves/resizes or
+  deletes it.
 
 ## Forbidden Claims
 
 - Full Acrobat Pro replacement.
+- 100/100 external replacement readiness.
 - 100% Acrobat-compatible.
 - External Acrobat Pro replacement score above 90.
 - Full PDF/A or PDF/X certification.
@@ -54,6 +59,11 @@ being confused with a fully verified Acrobat Pro replacement claim.
   feature-specific pass records.
 - Treating the external corpus manifest as completed real-world corpus evidence
   before files or reproducible generation steps are attached.
+- Removing any final 100/full replacement blocker before all gates in
+  `docs/final-100-gap-closure-plan.md` are complete.
+- Any external score above 80 while basic source editing integrity is broken:
+  source paragraph edits must preserve paragraph structure, and source object
+  clicks must not create destructive delete/redact operations.
 
 ## Current High-Risk Boundaries
 
@@ -69,6 +79,11 @@ being confused with a fully verified Acrobat Pro replacement claim.
 - **Deployment:** the app has a smoke-tested local web release package. There is
   no native desktop app, hosted production deployment, queue, auth, audit log, or
   managed engine lifecycle.
+- **Basic edit integrity:** source paragraph editing and source object selection
+  are now explicit release gates. A regression where paragraph edits split on
+  PDF soft wraps, lose word order, overlap protected image/caption/table regions,
+  or image/vector clicks schedule deletion immediately blocks above-80 external
+  scoring regardless of standards or deployment evidence.
 - **Preflight:** the current engine reports local signals and can include
   veraPDF PDF/A/PDF/UA validation output. PDF/X-3 fixup is implemented through
   Ghostscript `pdfwrite` and accepted only after qpdf, PyMuPDF, and local PDF/X
@@ -92,6 +107,9 @@ Use:
 > PDF/X-3 fixup, compare/batch UI workflows, representative
 > Acrobat/Preview/Chrome/Edge viewer smoke, and a 90/100 external replacement readiness
 > score.
+
+Final 100/full replacement wording remains blocked by
+`docs/final-100-gap-closure-plan.md`.
 
 Do not use:
 

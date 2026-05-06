@@ -12,6 +12,7 @@ import type {
   OcrCorrectionRequest,
   OcrRequest,
   OcrStatus,
+  PdfProviderStatus,
   PreflightFixupResponse,
   PreflightReport,
   SignatureValidation,
@@ -108,6 +109,25 @@ export async function getOcrStatusWithEngine(language = "eng"): Promise<OcrStatu
       }
     } catch (error) {
       console.warn(`PDF engine OCR status failed at ${endpoint}`, error);
+    }
+  }
+  return null;
+}
+
+export async function getPdfProviderStatusWithEngine(): Promise<PdfProviderStatus | null> {
+  const endpoints = buildEngineEndpoints("/api/pdf/provider-status");
+  for (const endpoint of endpoints) {
+    try {
+      const response = await fetch(endpoint);
+      if (!response.ok) {
+        continue;
+      }
+      const result: unknown = await response.json();
+      if (isPdfProviderStatus(result)) {
+        return result;
+      }
+    } catch (error) {
+      console.warn(`PDF engine provider status failed at ${endpoint}`, error);
     }
   }
   return null;
@@ -352,6 +372,40 @@ function isOcrStatus(value: unknown): value is OcrStatus {
     typeof candidate.ok === "boolean" &&
     Array.isArray(candidate.requestedLanguages) &&
     Array.isArray(candidate.availableLanguages)
+  );
+}
+
+function isPdfProviderStatus(value: unknown): value is PdfProviderStatus {
+  if (typeof value !== "object" || value === null) {
+    return false;
+  }
+  const candidate = value as Record<string, unknown>;
+  return (
+    typeof candidate.ok === "boolean" &&
+    typeof candidate.activeProvider === "string" &&
+    Array.isArray(candidate.providers) &&
+    candidate.providers.every(isPdfProviderStatusItem) &&
+    Array.isArray(candidate.warnings)
+  );
+}
+
+function isPdfProviderStatusItem(value: unknown): boolean {
+  if (typeof value !== "object" || value === null) {
+    return false;
+  }
+  const candidate = value as Record<string, unknown>;
+  return (
+    typeof candidate.id === "string" &&
+    typeof candidate.name === "string" &&
+    typeof candidate.available === "boolean" &&
+    typeof candidate.active === "boolean" &&
+    typeof candidate.configured === "boolean" &&
+    typeof candidate.sdkLoaded === "boolean" &&
+    typeof candidate.version === "string" &&
+    Array.isArray(candidate.capabilities) &&
+    typeof candidate.unavailableReason === "string" &&
+    typeof candidate.configuration === "object" &&
+    candidate.configuration !== null
   );
 }
 

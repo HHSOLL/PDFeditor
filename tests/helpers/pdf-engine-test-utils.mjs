@@ -7,13 +7,18 @@ export const root = process.cwd();
 export const enginePath = path.join(root, "engine", "pdf_engine.py");
 export const enginePython = process.env.PDF_ENGINE_PYTHON ||
   (existsSync(path.join(root, ".venv", "bin", "python")) ? path.join(root, ".venv", "bin", "python") : "python3");
+const toolPathPrefix = ["/opt/homebrew/bin", "/usr/local/bin"].filter((directory) => existsSync(directory)).join(":");
+export const toolEnv = {
+  ...process.env,
+  PATH: [toolPathPrefix, process.env.PATH || ""].filter(Boolean).join(":"),
+};
 
 export function runProcess(command, args, options = {}) {
   return new Promise((resolve, reject) => {
     const resolvedCommand = command === "python3" ? enginePython : command;
     const child = spawn(resolvedCommand, args, {
       cwd: options.cwd ?? root,
-      env: { ...process.env, ...(options.env ?? {}) },
+      env: { ...toolEnv, ...(options.env ?? {}) },
       stdio: ["ignore", "pipe", "pipe"],
     });
     const stdout = [];

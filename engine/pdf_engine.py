@@ -28,6 +28,8 @@ from typing import Any, Iterable, Literal, TypedDict
 
 import fitz
 
+from modules.provider_status import provider_status
+
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_FONT = ROOT / "public" / "fonts" / "AppleGothic.ttf"
@@ -195,6 +197,9 @@ def main() -> int:
     ocr_status_parser.add_argument("--language", default="eng")
     ocr_status_parser.add_argument("--tessdata")
     ocr_status_parser.add_argument("--stdout", action="store_true")
+
+    provider_status_parser = subparsers.add_parser("provider-status", help="Report PDF engine provider availability")
+    provider_status_parser.add_argument("--stdout", action="store_true")
 
     ocr_parser = subparsers.add_parser("ocr", help="Create a searchable PDF from scanned pages")
     ocr_parser.add_argument("--input")
@@ -417,6 +422,10 @@ def main() -> int:
     if args.command == "ocr-status":
         result = ocr_dependency_status(args.language, args.tessdata)
         write_json(result, sys.stdout)
+        return 0
+
+    if args.command == "provider-status":
+        write_json(provider_status(), sys.stdout)
         return 0
 
     if args.command == "ocr":
@@ -1937,7 +1946,7 @@ def validate_pdf_bytes(pdf_bytes: bytes, password: str = "") -> dict[str, Any]:
         errors.append(str(exc))
 
     qpdf_checked = False
-    qpdf_path = shutil.which("qpdf")
+    qpdf_path = find_executable("qpdf")
     if qpdf_path:
         qpdf_checked = True
         with tempfile.NamedTemporaryFile(suffix=".pdf") as handle:
@@ -1970,6 +1979,17 @@ def qpdf_check_command(qpdf_path: str, file_path: str, password: str) -> list[st
     if password:
         return [qpdf_path, f"--password={password}", "--check", file_path]
     return [qpdf_path, "--check", file_path]
+
+
+def find_executable(name: str) -> str | None:
+    found = shutil.which(name)
+    if found:
+        return found
+    for directory in ("/opt/homebrew/bin", "/usr/local/bin"):
+        candidate = os.path.join(directory, name)
+        if os.path.exists(candidate) and os.access(candidate, os.X_OK):
+            return candidate
+    return None
 
 
 def preflight_pdf_bytes(pdf_bytes: bytes) -> dict[str, Any]:

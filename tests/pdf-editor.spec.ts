@@ -460,6 +460,11 @@ test("selects multi-line PDF text as one editable paragraph without repainting t
   const editor = page.locator(".annotation.text textarea");
   await expect(editor).toBeVisible();
   await expect(editor).toHaveValue(/This paragraph can be covered and rewritten\..*Second sentence shares/s);
+  const paragraphValue = await editor.inputValue();
+  expect(paragraphValue).toBe(
+    "This paragraph can be covered and rewritten. Second sentence shares the same paragraph block.",
+  );
+  expect(paragraphValue).not.toContain("\nSecond sentence");
   await expect(page.locator("#fontSize")).toHaveValue("12");
   await page.keyboard.press("Escape");
   await expect(page.locator(".annotation.selected")).toHaveCount(0);
@@ -759,7 +764,7 @@ test("moves an existing PDF image through the engine instead of deleting it", as
     .setInputFiles(samplePath);
   await expect(page.locator(".source-image").first()).toBeVisible();
   await page.locator(".source-image").first().click();
-  await expect(page.locator(".annotation.redact.selected")).toBeVisible();
+  await expect(page.locator(".annotation.image.selected")).toBeVisible();
   await page.locator("#posX").fill("55");
   await page.locator("#posX").press("Enter");
   await page.locator("#posY").fill("45");
@@ -823,7 +828,7 @@ test("edits and exports the repository ex.pdf without losing page structure", as
   const firstSourceImage = page.locator(".source-image").first();
   await expect(firstSourceImage).toBeVisible({ timeout: 45_000 });
   await firstSourceImage.click();
-  await expect(page.locator(".annotation.redact").first()).toBeVisible();
+  await expect(page.locator(".annotation.image.selected")).toBeVisible();
 
   const downloadPromise = page.waitForEvent("download", { timeout: 180_000 });
   await page.getByRole("button", { name: "PDF 내보내기" }).click();
@@ -836,7 +841,7 @@ test("edits and exports the repository ex.pdf without losing page structure", as
   expect(text).toContain(replacementTitle);
   expect(text).not.toContain(originalTitle);
   const exportedImageCounts = await pageImageCounts(exportedPath);
-  expect(exportedImageCounts[0]).toBeLessThan(sourceImageCounts[0]);
+  expect(exportedImageCounts[0]).toBe(sourceImageCounts[0]);
 });
 
 test("selects an existing vector object and exports native vector deletion", async ({ page }) => {
