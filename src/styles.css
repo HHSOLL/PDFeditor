@@ -640,12 +640,12 @@ button:disabled {
   border: 1px solid transparent;
   border-radius: 2px;
   background: transparent;
-  cursor: crosshair;
+  cursor: pointer;
 }
 
 .source-image:hover {
-  border-color: #b42318;
-  background: rgba(180, 35, 24, 0.08);
+  border-color: #1a73b8;
+  background: rgba(26, 115, 184, 0.08);
 }
 
 .source-vector {
@@ -694,6 +694,12 @@ button:disabled {
   height: 100%;
   object-fit: contain;
   pointer-events: none;
+}
+
+.annotation.image.source-object-edit {
+  border: 1px dashed #176b58;
+  background: rgba(23, 107, 88, 0.08);
+  cursor: move;
 }
 
 .annotation.form-field {
@@ -786,6 +792,23 @@ button:disabled {
 .field {
   display: grid;
   gap: 7px;
+}
+
+.inspector-section {
+  display: grid;
+  gap: 10px;
+  border-bottom: 1px solid #edf1f5;
+  padding-bottom: 12px;
+}
+
+.compact-field {
+  gap: 3px;
+}
+
+.compact-field strong,
+.compact-field span {
+  color: #172026;
+  font-size: 13px;
 }
 
 .field label {

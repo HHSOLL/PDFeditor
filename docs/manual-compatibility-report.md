@@ -66,28 +66,56 @@ Office-style exports, Preview/Chrome/Edge surrogates, signed-document surrogates
 tagged/PDF-A/PDF-X/accessibility surrogates, CJK/emoji/RTL text, and malformed or
 large-document categories.
 
-`MANUAL_VIEWER_REQUIRE_PASS=1 npm run test:manual-viewer-smoke` opened every
-package PDF in the actual local viewer apps and captured per-viewer screenshots.
-The run passed 200 out of 200 open/render checks:
+`MANUAL_VIEWER_LIMIT=50 MANUAL_VIEWER_DELAY_MS=900
+MANUAL_VIEWER_COMMAND_TIMEOUT_MS=7000 MANUAL_VIEWER_OPEN_TIMEOUT_MS=7000 npm
+run test:manual-viewer-smoke` opened every package PDF in the actual local
+viewer apps and captured per-viewer screenshots. The run passed 200 out of 200
+open/render checks:
 
 ```txt
-tmp/manual-viewer-smoke/2026-05-05T17-33-44-886Z/
+tmp/manual-viewer-smoke/2026-05-05T20-00-36-400Z/
 ```
 
 Result summary:
 
 | Viewer | Files | Pass | Fail | Evidence |
 | --- | ---: | ---: | ---: | --- |
-| Adobe Acrobat Pro / Reader | 50 | 50 | 0 | `tmp/manual-viewer-smoke/2026-05-05T17-33-44-886Z/results.json` |
-| macOS Preview | 50 | 50 | 0 | `tmp/manual-viewer-smoke/2026-05-05T17-33-44-886Z/results.json` |
-| Google Chrome PDF viewer | 50 | 50 | 0 | `tmp/manual-viewer-smoke/2026-05-05T17-33-44-886Z/results.json` |
-| Microsoft Edge PDF viewer | 50 | 50 | 0 | `tmp/manual-viewer-smoke/2026-05-05T17-33-44-886Z/results.json` |
+| Adobe Acrobat Pro / Reader | 50 | 50 | 0 | `tmp/manual-viewer-smoke/2026-05-05T20-00-36-400Z/results.json` |
+| macOS Preview | 50 | 50 | 0 | `tmp/manual-viewer-smoke/2026-05-05T20-00-36-400Z/results.json` |
+| Google Chrome PDF viewer | 50 | 50 | 0 | `tmp/manual-viewer-smoke/2026-05-05T20-00-36-400Z/results.json` |
+| Microsoft Edge PDF viewer | 50 | 50 | 0 | `tmp/manual-viewer-smoke/2026-05-05T20-00-36-400Z/results.json` |
 
 The pass criterion was viewer-specific: the script required an app/window or
 tab title matching the PDF filename or external corpus ID and a non-empty
 screenshot. This is representative open/render smoke evidence. It does not
 replace deeper Acrobat panel verification for signature trust chains, Acrobat
 Preflight parity, PDF/UA repair workflow, or hidden-information comparison.
+Those deeper feature-panel records are mandatory before any 100/100 or full
+Acrobat Pro replacement claim under `docs/final-100-gap-closure-plan.md`.
+
+### 2026-05-06 Follow-Up Automation Attempt
+
+During the 90-to-100 implementation pass, the automated GUI smoke was retried
+with `MANUAL_VIEWER_LIMIT=1 MANUAL_VIEWER_DELAY_MS=900 npm run
+test:manual-viewer-smoke`. The run was stopped because macOS AppleScript blocked
+while asking Acrobat to open
+`/Users/sol/Desktop/pdfeditor-manual-smoke-input/01-EXT-ACR-001-acrobat-created.pdf`.
+No compatibility pass credit was taken from this interrupted run. Deep Acrobat
+feature-panel smoke remains a final 100-point blocker.
+
+The harness was then changed to open Acrobat with the non-blocking macOS
+`open -a` path, apply per-command timeouts, and close the viewer after each
+file by default. The focused rerun
+`MANUAL_VIEWERS=acrobat MANUAL_VIEWER_LIMIT=50 MANUAL_VIEWER_DELAY_MS=900
+MANUAL_VIEWER_COMMAND_TIMEOUT_MS=5000 MANUAL_VIEWER_OPEN_TIMEOUT_MS=5000 npm
+run test:manual-viewer-smoke` passed 50/50 at
+`tmp/manual-viewer-smoke/2026-05-05T19-35-35-632Z/results.json`. This confirms
+the sequential one-file open/check/close workflow across the full representative
+Acrobat package. After the same fallback logic was applied to Acrobat, Chrome,
+and Edge title detection, the full four-viewer rerun passed 200/200 at
+`tmp/manual-viewer-smoke/2026-05-05T20-00-36-400Z/results.json`. This is stronger
+open/render evidence, but it is still not the deep 100-file feature-panel smoke
+required for a final 100-point claim.
 
 ## Required Manual Smoke Matrix
 

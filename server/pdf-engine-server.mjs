@@ -14,6 +14,11 @@ const enginePython = process.env.PDF_ENGINE_PYTHON ||
   (existsSync(path.join(root, ".venv", "bin", "python")) ? path.join(root, ".venv", "bin", "python") : "python3");
 const port = Number(process.env.PORT || 8787);
 const maxBodyBytes = 80 * 1024 * 1024;
+const toolPathPrefix = ["/opt/homebrew/bin", "/usr/local/bin"].filter((directory) => existsSync(directory)).join(":");
+const childEnv = {
+  ...process.env,
+  PATH: [toolPathPrefix, process.env.PATH || ""].filter(Boolean).join(":"),
+};
 
 const mimeTypes = new Map([
   [".html", "text/html; charset=utf-8"],
@@ -40,6 +45,12 @@ const server = createServer(async (request, response) => {
 
     if (request.method === "GET" && request.url === "/api/health") {
       sendJson(response, 200, { ok: true, engine: "pymupdf" });
+      return;
+    }
+
+    if (request.method === "GET" && request.url === "/api/pdf/provider-status") {
+      const result = await runEngine(["provider-status", "--stdout"], {});
+      sendJson(response, 200, result);
       return;
     }
 
@@ -183,6 +194,7 @@ function runEngine(args, payload) {
   return new Promise((resolve, reject) => {
     const child = spawn(enginePython, [enginePath, ...args], {
       cwd: root,
+      env: childEnv,
       stdio: ["pipe", "pipe", "pipe"],
     });
     const stdout = [];

@@ -77,6 +77,9 @@ export interface TextAnnotation extends AnnotationBase {
   fontSize: number;
   fontFamily?: string;
   fontName?: string;
+  textAlign?: "left" | "center" | "right";
+  lineHeight?: number;
+  reflowMode?: "semantic" | "replaceOnly";
   reflowable?: boolean;
   sourceTextId?: string;
   eraseOriginal?: {
@@ -149,6 +152,19 @@ export interface SourceImageItem {
   height: number;
 }
 
+export interface SourceVectorItem {
+  id: string;
+  pageId: string;
+  sourceVectorId: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  stroke?: string;
+  fill?: string;
+  strokeWidth?: number;
+}
+
 export interface DragState {
   id: string;
   mode: "move" | "resize";
@@ -179,6 +195,9 @@ export interface SourceTextItem {
   fontName: string;
   lineCount: number;
   reflowable: boolean;
+  role?: "title" | "body" | "caption" | "header" | "footer" | "tableText";
+  flowId?: string;
+  paragraphBreakAfter?: boolean;
 }
 
 export interface SourceMask {
@@ -193,6 +212,15 @@ export interface FlowedSourceText {
   id: string;
   item: SourceTextItem;
   pageId: string;
+  y: number;
+}
+
+export interface FlowedSourceObject {
+  id: string;
+  kind: "image" | "vector";
+  item: SourceImageItem | SourceVectorItem;
+  pageId: string;
+  x: number;
   y: number;
 }
 
@@ -214,6 +242,7 @@ export interface EditorFonts {
 export interface EngineOperation {
   type: EngineOperationType;
   pageIndex: number;
+  sourcePageIndex?: number;
   x: number;
   y: number;
   width: number;
@@ -224,9 +253,11 @@ export interface EngineOperation {
   fontFamily?: string;
   fontName?: string;
   color?: string;
+  fill?: string;
   opacity?: number;
   strokeWidth?: number;
   lineHeight?: number;
+  textAlign?: "left" | "center" | "right";
   sourceAnnotationId?: string;
   annotationSubtype?: string;
   sourceImageId?: string;
@@ -477,6 +508,63 @@ export interface OcrStatus {
   availableLanguages: string[];
   missingLanguages: string[];
   errors: string[];
+}
+
+export interface PdfProviderConfiguration {
+  source?: string;
+  providerEnv?: string;
+  moduleEnv?: string;
+  licenseKeyEnv?: string;
+  licenseFileEnv?: string;
+  provider?: string;
+  module?: string;
+  licenseConfigured?: boolean;
+}
+
+export interface PdfProviderStatusItem {
+  id: "pymupdf" | "commercial" | string;
+  name: string;
+  label?: string;
+  available: boolean;
+  active: boolean;
+  configured: boolean;
+  sdkLoaded: boolean;
+  version: string;
+  capabilities: string[];
+  capabilityDetails?: PdfProviderCapability[];
+  unavailableReason: string;
+  reason?: string;
+  configuration: PdfProviderConfiguration;
+}
+
+export interface PdfProviderCapability {
+  id: string;
+  label: string;
+  status: string;
+  source: string;
+  claimable: boolean;
+  reason: string;
+  evidence: string[];
+}
+
+export interface PdfProviderClaimBlocker {
+  id: string;
+  reason: string;
+  requiredFor: string;
+}
+
+export interface PdfProviderStatus {
+  ok: boolean;
+  activeProvider: string;
+  providers: PdfProviderStatusItem[];
+  warnings: string[];
+  capabilities?: Record<string, PdfProviderCapability>;
+  claimGate100?: {
+    ready: boolean;
+    blockers: PdfProviderClaimBlocker[];
+    policy: string;
+  };
+  environment?: Record<string, string>;
 }
 
 export interface OcrRequest {

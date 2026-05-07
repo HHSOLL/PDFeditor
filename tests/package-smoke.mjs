@@ -3,6 +3,7 @@ import { existsSync } from "node:fs";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { PDFDocument, StandardFonts } from "pdf-lib";
+import { validateDesktopReadiness } from "./desktop-readiness-check.mjs";
 
 const root = process.cwd();
 const releaseRoot = path.join(root, "release", "pdfeditor-local");
@@ -23,6 +24,8 @@ for (const requiredPath of [
     throw new Error(`local package is missing ${requiredPath}; run npm run package:local`);
   }
 }
+
+await validateDesktopReadiness(releaseRoot);
 
 const server = spawn(process.execPath, ["server/pdf-engine-server.mjs"], {
   cwd: releaseRoot,

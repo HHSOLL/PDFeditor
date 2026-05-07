@@ -97,6 +97,8 @@ tmp/manual-viewer-smoke/2026-05-05T17-33-44-886Z/
 
 This package contributes representative external viewer-smoke evidence. It does
 not close the real-world corpus acquisition gate by itself.
+It also does not close the final 100/full replacement gate in
+`docs/final-100-gap-closure-plan.md`.
 
 Current planned manifest coverage:
 
@@ -131,3 +133,5 @@ Current planned manifest coverage:
 Until actual real-world files or faithful reproducible generation steps are
 attached and linked to manual compatibility results, this manifest and its
 surrogate PDFs do not add external readiness points by themselves.
+They cannot support a 100/100 or full Acrobat Pro replacement claim until the
+real-world corpus gate in `docs/final-100-gap-closure-plan.md` is complete.

@@ -11,6 +11,8 @@ external product-readiness score for an Acrobat Pro replacement claim.
 - External 90-point claim: **claimable with the representative viewer-smoke
   boundary below**
 - External score above 90: **not claimable yet**
+- External 100-point/full replacement claim: **blocked by
+  `docs/final-100-gap-closure-plan.md`**
 
 The project is now materially closer to an Acrobat-class product because OCR
 correction, certificate signing, signature validation, basic accessibility
@@ -43,6 +45,18 @@ professional validation engines.
   is smoke-tested from `release/pdfeditor-local`.
 - No PDF/A/X certification, full PDF/UA, LTV/timestamp signature, complete
   hidden-data sanitizer, or full vector editor claim is allowed yet.
+- Basic edit integrity is a hard product gate, not a polish item. If editing a
+  source paragraph inserts artificial line breaks, loses word order, fails to
+  preserve paragraph structure, or lets font-size changes overlap protected
+  images/captions/tables, the Text editing / semantic reflow area receives no
+  more than 2 external points and the total external score is capped at 75.
+- Source object selection must be non-destructive. If clicking an existing PDF
+  image or vector object schedules deletion, hides the object, or exports a
+  destructive operation without an explicit delete/redact command, the Image /
+  vector / object editing area receives no more than 2 external points and the
+  total external score is capped at 75.
+- Any regression in these two basic gates blocks external claims above 80 even
+  if standards, OCR, signature, sanitizer, or packaging tests pass.
 
 ## Score Table
 
@@ -50,8 +64,8 @@ professional validation engines.
 | --- | ---: | ---: | --- | --- |
 | Viewer / workspace / performance | 8 | 7 | Continuous center viewport, fixed side panels, page-scoped rendering, lazy large-document engine fixture, 50-PDF Acrobat/Preview/Chrome/Edge open/render smoke | 1000-page UX/memory report and deeper cross-viewer interaction smoke |
 | Core compatibility / export validation | 10 | 9 | `qpdf`, PyMuPDF validation, PDF.js E2E reopen/export, 100 generated PDF corpus, 200/200 representative manual viewer smoke | Third-party real-world 100+ corpus and deep feature-panel external app smoke |
-| Text editing / semantic reflow | 12 | 6 | Redaction + replacement, paragraph reflow tests, figure/caption/cross-page coverage | Multi-column/table/RTL/emoji manual corpus and Acrobat visual smoke |
-| Image / vector / object editing | 8 | 7 | Engine-backed image delete/replace/move tests plus UI move path that uses `moveImage`; existing vector objects are detected, surfaced, inspected, and exported through `deleteVector` or `moveVector` instead of overlay-only movement | Image crop/rotate/resize UI polish, exact vector path preservation, vector color/stroke editing UI, richer object inspector smoke |
+| Text editing / semantic reflow | 12 | 6 | Redaction + replacement, paragraph reflow tests, figure/caption/cross-page coverage, and a hard regression that source paragraph soft wraps stay one editable paragraph instead of becoming forced line breaks | Multi-column/table/RTL/emoji manual corpus and Acrobat visual smoke |
+| Image / vector / object editing | 8 | 7 | Engine-backed image delete/replace/move tests plus UI move path that uses `moveImage`; existing image click is a non-destructive selection and only movement/resizing emits `moveImage`; existing vector objects are detected, surfaced, inspected, and exported through `deleteVector` or `moveVector` instead of overlay-only movement | Image crop/rotate/resize UI polish, exact vector path preservation, vector color/stroke editing UI, richer object inspector smoke |
 | Page organization | 7 | 6 | Page delete/reorder/rotate/duplicate/extract/insert/crop/resize/bookmark remap tests | More link/named-destination/form remap corpus and manual smoke |
 | Comments / annotations | 6 | 5 | Imported annotations, native/flatten save, file attachment comment tests, representative Preview/Acrobat/Chrome/Edge annotation-category open/render smoke | Cross-viewer annotation corpus and reply/stamp/XFDF comment workflows |
 | Forms | 8 | 7 | AcroForm fill/save/create, required/default/export values, tab order, XFDF, XFA warning, representative form-category viewer smoke | Deeper Acrobat/Preview/Chrome appearance-panel report and richer field UI |
@@ -84,6 +98,14 @@ professional validation engines.
 - Existing image move from the UI now emits an engine `moveImage` operation when
   the selected source-image box is repositioned or resized, preserving a real
   image object instead of deleting it or keeping an overlay.
+- Existing image click is now explicitly non-destructive. The regression suite
+  verifies that simply selecting an image does not create a `redact` box, does
+  not emit `deleteImage`, and does not reduce the image count in the exported
+  `ex.pdf` fixture.
+- Source paragraph selection now treats PDF line wrapping as paragraph layout
+  instead of textarea hard breaks. The regression suite verifies that a
+  two-line source paragraph opens as one editable paragraph with no artificial
+  newline before the second sentence.
 - Existing vector drawings are now exposed in the document layer, selectable
   from the UI, shown in the object inspector, and exported through the engine
   `deleteVector` operation so the original colored line art is removed from the
@@ -118,6 +140,11 @@ The shortest path from the current verified 90 to a claimable 95+ is:
 5. Add image crop/rotate/resize UI polish, vector move/color/stroke editing,
    full multi-step action-builder UI with queue/worker execution, richer object
    inspector details, and annotation/object diff.
+
+Any 100/100 or full Acrobat Pro replacement claim additionally requires every
+gate in `docs/final-100-gap-closure-plan.md` to be marked complete with matching
+implementation, automated test, manual smoke, corpus, validator, sanitizer,
+signature, PDF/UA, and desktop/production-package evidence.
 
 Until those are complete, the safe external claim is:
 

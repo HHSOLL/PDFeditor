@@ -38,6 +38,16 @@ try {
     throw new Error(`unexpected health response: ${JSON.stringify(health)}`);
   }
 
+  const providerStatus = await fetchJson(`http://127.0.0.1:${port}/api/pdf/provider-status`);
+  if (
+    !providerStatus.ok ||
+    providerStatus.activeProvider !== "pymupdf" ||
+    providerStatus.claimGate100?.ready !== false ||
+    !providerStatus.claimGate100?.blockers?.some((blocker) => blocker.id === "commercialSdkObjectEditing")
+  ) {
+    throw new Error(`provider status did not preserve the final claim gate: ${JSON.stringify(providerStatus)}`);
+  }
+
   const page = await fetch(`http://127.0.0.1:${port}/`);
   const html = await page.text();
   if (!page.ok || !html.includes("<!doctype html>")) {

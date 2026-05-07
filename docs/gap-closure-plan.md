@@ -61,6 +61,11 @@ Safe current wording remains:
 | 15 | Production or desktop packaging | `scripts/package-local.mjs`, `server/pdf-engine-server.mjs`, `docs/deployment.md` | package/deployment/job/storage smoke | User launch smoke | Yes | Lifecycle automation | Yes | dev-server-free execution with logs/recovery | Local web package has launcher, manifest, logs, support bundle; native/hosted release still blocked |
 | 16 | Final claim gate | all docs and tests | `npm run verify:local`, `npm run verify:external`, `npm run test:corpus`, release/package smoke | Complete matrix | Complete | Complete | Complete | external readiness >= 95 and forbidden claims removed only if evidence exists | Blocked |
 
+The final 100/full replacement gate is controlled by
+`docs/final-100-gap-closure-plan.md`. That document must remain blocked until the
+real-world corpus, deep manual smoke, desktop/production package, validator and
+preflight, LTV signature, complete sanitizer, and PDF/UA gates are all complete.
+
 ## Immediate Closure Order
 
 1. Complete deeper feature-panel manual compatibility records for signature
@@ -90,6 +95,9 @@ Safe current wording remains:
 - `tests/release-claim-boundary.mjs` enforces that external 90+, full Acrobat
   replacement, viewer compatibility, production release, and PDF/A/X/UA claims
   stay blocked while required evidence is pending.
+- `docs/final-100-gap-closure-plan.md` defines the seven hard evidence gates that
+  must be complete before any 100/100 or full Acrobat Pro replacement claim can
+  be made.
 - `tests/manual-smoke-package.mjs` builds a validated 50-PDF package and
   checklist under `tmp/manual-compatibility-package/` so Phase 1 manual smoke has
   stable input files instead of ad hoc PDFs.

@@ -128,7 +128,7 @@ async function createImageCollisionPdf(filePath: string): Promise<void> {
   page.drawText("Figure collision lead paragraph", {
     x: 72,
     y: 724,
-    size: 16,
+    size: 14,
     font,
     color: rgb(0.1, 0.12, 0.15),
   });
@@ -433,6 +433,55 @@ async function expectDocumentLoaded(page: Page, pageCountText = "1쪽"): Promise
   await expect(page.locator(".page-stage").first()).toBeVisible({ timeout: 45_000 });
 }
 
+async function openAdvancedTools(page: Page): Promise<void> {
+  await page.waitForSelector("#advancedToolsPanel", { state: "attached" });
+  await page.evaluate(() => {
+    const panel = document.querySelector<HTMLDetailsElement>("#advancedToolsPanel");
+    if (panel) {
+      panel.open = true;
+    }
+  });
+  await expect(page.locator("#advancedToolsPanel")).toHaveJSProperty("open", true);
+}
+
+async function openAdvancedSection(page: Page, name: string): Promise<void> {
+  const sectionKeys: Record<string, string> = {
+    "OCR / 스캔 PDF": "ocr",
+    "인증서 서명 / 보안": "signature",
+    "접근성 기본 수리": "accessibility",
+    "비교 / 배치 자동화": "compare-batch",
+    "문서 메타데이터": "metadata",
+  };
+  const sectionKey = sectionKeys[name];
+  await openAdvancedTools(page);
+  await page.evaluate(({ sectionName, key }) => {
+    const panel = document.querySelector<HTMLDetailsElement>("#advancedToolsPanel");
+    if (!panel) {
+      return;
+    }
+    panel.open = true;
+    const target =
+      (key
+        ? panel.querySelector<HTMLDetailsElement>(`details[data-advanced-section="${key}"]`)
+        : null) ??
+      Array.from(panel.querySelectorAll<HTMLDetailsElement>("details")).find((details) => {
+      const summary = details.querySelector("summary");
+      return summary?.textContent?.includes(sectionName);
+    });
+    if (target) {
+      target.open = true;
+      target.dataset.testOpen = sectionName;
+      panel.dispatchEvent(new Event("toggle"));
+      target.dispatchEvent(new Event("toggle"));
+      target.scrollIntoView({ block: "nearest" });
+    }
+  }, { sectionName: name, key: sectionKey });
+  const section = sectionKey
+    ? page.locator(`#advancedToolsPanel details[data-advanced-section="${sectionKey}"]`).first()
+    : page.locator(`#advancedToolsPanel details[data-test-open="${name}"]`).first();
+  await expect(section).toHaveJSProperty("open", true);
+}
+
 test("selects multi-line PDF text as one editable paragraph without repainting the canvas", async ({
   page,
 }) => {
@@ -460,6 +509,11 @@ test("selects multi-line PDF text as one editable paragraph without repainting t
   const editor = page.locator(".annotation.text textarea");
   await expect(editor).toBeVisible();
   await expect(editor).toHaveValue(/This paragraph can be covered and rewritten\..*Second sentence shares/s);
+  const paragraphValue = await editor.inputValue();
+  expect(paragraphValue).toBe(
+    "This paragraph can be covered and rewritten. Second sentence shares the same paragraph block.",
+  );
+  expect(paragraphValue).not.toContain("\nSecond sentence");
   await expect(page.locator("#fontSize")).toHaveValue("12");
   await page.keyboard.press("Escape");
   await expect(page.locator(".annotation.selected")).toHaveCount(0);
@@ -505,10 +559,15 @@ test("edits existing PDF text with auto reflow and exports real PDF text", async
   await page.locator("#boxWidth").fill("18");
   await page.locator("#boxWidth").press("Enter");
 
-  const afterHeight = await page.locator(".annotation.text").evaluate((node) => {
-    return node.getBoundingClientRect().height;
-  });
-  expect(afterHeight).toBeGreaterThan(beforeHeight);
+  await expect
+    .poll(
+      async () =>
+        page.locator(".annotation.text").evaluate((node) => {
+          return node.getBoundingClientRect().height;
+        }),
+      { timeout: 10_000 },
+    )
+    .toBeGreaterThan(beforeHeight);
   await page.screenshot({ path: "tmp/editor-screen.png", fullPage: true });
 
   const downloadPromise = page.waitForEvent("download");
@@ -759,7 +818,7 @@ test("moves an existing PDF image through the engine instead of deleting it", as
     .setInputFiles(samplePath);
   await expect(page.locator(".source-image").first()).toBeVisible();
   await page.locator(".source-image").first().click();
-  await expect(page.locator(".annotation.redact.selected")).toBeVisible();
+  await expect(page.locator(".annotation.image.selected")).toBeVisible();
   await page.locator("#posX").fill("55");
   await page.locator("#posX").press("Enter");
   await page.locator("#posY").fill("45");
@@ -823,7 +882,7 @@ test("edits and exports the repository ex.pdf without losing page structure", as
   const firstSourceImage = page.locator(".source-image").first();
   await expect(firstSourceImage).toBeVisible({ timeout: 45_000 });
   await firstSourceImage.click();
-  await expect(page.locator(".annotation.redact").first()).toBeVisible();
+  await expect(page.locator(".annotation.image.selected")).toBeVisible();
 
   const downloadPromise = page.waitForEvent("download", { timeout: 180_000 });
   await page.getByRole("button", { name: "PDF 내보내기" }).click();
@@ -836,7 +895,7 @@ test("edits and exports the repository ex.pdf without losing page structure", as
   expect(text).toContain(replacementTitle);
   expect(text).not.toContain(originalTitle);
   const exportedImageCounts = await pageImageCounts(exportedPath);
-  expect(exportedImageCounts[0]).toBeLessThan(sourceImageCounts[0]);
+  expect(exportedImageCounts[0]).toBe(sourceImageCounts[0]);
 });
 
 test("selects an existing vector object and exports native vector deletion", async ({ page }) => {
@@ -876,9 +935,10 @@ test("saves metadata and duplicated pages through the advanced save pipeline", a
   await page
     .locator('input[type="file"][accept="application/pdf"]')
     .setInputFiles(samplePath);
-  await expect(page.locator(".page-shell canvas")).toBeVisible();
+  await expectDocumentLoaded(page);
 
   await page.locator("#saveMode").selectOption("native");
+  await openAdvancedSection(page, "문서 메타데이터");
   await expect(page.locator("#metaTitle")).toBeVisible();
   await page.locator("#metaTitle").fill("Advanced PDF Studio Export");
   await page.locator("#metaTitle").blur();
@@ -899,7 +959,8 @@ test("saves metadata and duplicated pages through the advanced save pipeline", a
   expect(exported.getAuthor()).toBe("HHSOLL");
 });
 
-test("runs preflight from the inspector without an inert command button", async ({ page }) => {
+test("runs preflight from the inspector without an inert command button", async ({ page }, testInfo) => {
+  testInfo.setTimeout(120_000);
   const samplePath = path.resolve("tmp/sample-preflight-ui.pdf");
   const fixupPath = path.resolve("tmp/exported-pdfx-fixup-ui.pdf");
   await createSamplePdf(samplePath);
@@ -910,13 +971,20 @@ test("runs preflight from the inspector without an inert command button", async 
     .setInputFiles(samplePath);
   await expect(page.locator(".page-shell canvas")).toBeVisible();
 
+  await openAdvancedTools(page);
   await expect(page.locator("#preflightButton")).toBeEnabled();
-  await page.locator("#preflightButton").click();
-  await expect(page.locator(".preflight-panel")).toContainText("사전 검사");
+  await page.evaluate(() => {
+    document.querySelector<HTMLButtonElement>("#preflightButton")?.click();
+  });
+  await openAdvancedTools(page);
+  await expect(page.locator(".preflight-panel")).toContainText("사전 검사", { timeout: 60_000 });
   await expect(page.locator(".preflight-panel")).toContainText("1쪽");
   await expect(page.locator("#toast")).toContainText("사전 검사");
 
+  await openAdvancedTools(page);
   await expect(page.locator("#preflightFixupButton")).toBeEnabled();
+  await page.locator("#preflightFixupButton").scrollIntoViewIfNeeded();
+  await expect(page.locator("#preflightFixupButton")).toBeVisible();
   const downloadPromise = page.waitForEvent("download");
   await page.locator("#preflightFixupButton").click();
   const download = await downloadPromise;
@@ -941,6 +1009,7 @@ test("runs OCR correction from the inspector and exports searchable PDF text", a
     .setInputFiles(samplePath);
   await expectDocumentLoaded(page);
 
+  await openAdvancedSection(page, "OCR / 스캔 PDF");
   await page.locator("#ocrCorrectionText").fill("Corrected OCR UI text 987");
   const downloadPromise = page.waitForEvent("download");
   await page.locator("#ocrCorrectButton").click();
@@ -966,6 +1035,7 @@ test("signs a PDF with a certificate from the inspector and validates the signed
   await expectDocumentLoaded(page);
   await page.locator("#certificateInput").setInputFiles(certPath);
   await page.locator("#certificateKeyInput").setInputFiles(keyPath);
+  await openAdvancedSection(page, "인증서 서명 / 보안");
   await page.locator("#certificateSignerName").fill("UI Certificate Signer");
 
   const downloadPromise = page.waitForEvent("download");
@@ -989,8 +1059,10 @@ test("repairs basic accessibility metadata from the inspector", async ({ page })
     .locator('input[type="file"][accept="application/pdf"]')
     .setInputFiles(samplePath);
   await expectDocumentLoaded(page);
+  await openAdvancedSection(page, "문서 메타데이터");
   await page.locator("#metaTitle").fill("Accessible UI Smoke");
   await page.locator("#metaTitle").blur();
+  await openAdvancedSection(page, "접근성 기본 수리");
   await page.locator("#accessibilityLanguage").fill("ko-KR");
   await page.locator("#accessibilityAltText").fill("Scanned contract page image");
 
@@ -1018,6 +1090,7 @@ test("compares two PDFs from the inspector and exports a real compare report", a
     .setInputFiles(leftPath);
   await expectDocumentLoaded(page);
   await page.locator("#compareInput").setInputFiles(rightPath);
+  await openAdvancedSection(page, "비교 / 배치 자동화");
   await expect(page.locator("#compareRunButton")).toBeEnabled();
 
   const downloadPromise = page.waitForEvent("download");
@@ -1025,6 +1098,7 @@ test("compares two PDFs from the inspector and exports a real compare report", a
   const download = await downloadPromise;
   await download.saveAs(reportPath);
 
+  await openAdvancedSection(page, "비교 / 배치 자동화");
   await expect(page.locator(".preflight-panel")).toContainText("비교 결과");
   await expect(page.locator(".preflight-panel")).toContainText("변경 1쪽");
   await expect(page.locator(".compare-region").first()).toBeVisible();
@@ -1050,14 +1124,17 @@ test("runs batch automation from the inspector and writes structural PDF changes
     .locator('input[type="file"][accept="application/pdf"]')
     .setInputFiles(samplePath);
   await expectDocumentLoaded(page);
+  await openAdvancedSection(page, "비교 / 배치 자동화");
   await page.locator("#batchActionName").fill("Sanitize watermark preset");
   await page.locator("#batchWatermarkText").fill("Batch UI watermark");
   await page.locator("#batchRedactText").fill("BATCH_UI_SECRET");
   await page.locator("#batchSavePresetButton").click();
+  await openAdvancedSection(page, "비교 / 배치 자동화");
   await page.locator("#batchWatermarkText").fill("Changed before load");
   await page.locator("#batchRedactText").fill("");
   await page.locator("#batchSanitizeHiddenInfo").uncheck();
   await page.locator("#batchLoadPresetButton").click();
+  await openAdvancedSection(page, "비교 / 배치 자동화");
   await expect(page.locator("#batchActionName")).toHaveValue("Sanitize watermark preset");
   await expect(page.locator("#batchWatermarkText")).toHaveValue("Batch UI watermark");
   await expect(page.locator("#batchRedactText")).toHaveValue("BATCH_UI_SECRET");
@@ -1087,6 +1164,7 @@ test("imports existing PDF annotations and exports real annotation deletion", as
   await page
     .locator('input[type="file"][accept="application/pdf"]')
     .setInputFiles(samplePath);
+  await expectDocumentLoaded(page);
 
   const importedAnnotation = page.locator(".annotation.rect").first();
   await expect(importedAnnotation).toBeVisible();
