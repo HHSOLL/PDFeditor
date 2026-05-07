@@ -51,6 +51,7 @@ import type {
   EnginePayload,
   EngineSourceText,
   ExportValidation,
+  FlowedSourceObject,
   FlowedSourceText,
   FormFieldAnnotation,
   ImageAnnotation,
@@ -72,6 +73,7 @@ import type {
   SourceImageItem,
   SourceMask,
   SourceTextItem,
+  SourceVectorItem,
   TextAnnotation,
   Tool,
 } from "./types";
@@ -104,6 +106,8 @@ let compareBytes: Uint8Array | null = null;
 let compareFileName = "";
 let lastCompareResult: CompareResult | null = null;
 let compareRegionOverlaysVisible = true;
+let advancedToolsOpen = false;
+const advancedSectionOpenState: Record<string, boolean> = {};
 let batchActionName = "기본 배치 작업";
 let batchWatermarkText = "Batch watermark";
 let batchRedactText = "";
@@ -138,6 +142,7 @@ let currentPageScrollFrame = 0;
 let pageVisibilityObserver: IntersectionObserver | null = null;
 let pageMetricsById = new Map<string, PageMetrics>();
 let semanticReflowPlanCache: { key: string; plan: ReflowPlan } | null = null;
+let sourceObjectHydrationToken = 0;
 
 const tools: Array<{ id: Tool; label: string; icon: string }> = [
   { id: "select", label: "선택", icon: "↖" },
@@ -397,13 +402,19 @@ type PageMetrics = {
 type LayoutBlock = {
   id: string;
   pageId: string;
-  type: "text" | "image" | "caption" | "figure" | "table";
+  type: "text" | "title" | "body" | "caption" | "header" | "footer" | "tableText" | "image" | "figure" | "table";
   bbox: NormalizedRect;
   flowId: string;
   movable: boolean;
   protected: boolean;
   sourceObjectId?: string;
   groupId?: string;
+};
+type OccupiedFlowRect = {
+  pageId: string;
+  bbox: NormalizedRect;
+  flowId: string;
+  sourceId: string;
 };
 type ReflowTarget = {
   sourceTextId: string;
@@ -412,9 +423,21 @@ type ReflowTarget = {
   y: number;
   reason: "height-delta" | "protected-block" | "page-overflow";
 };
+type ReflowObjectTarget = {
+  sourceObjectId: string;
+  sourcePageId: string;
+  pageId: string;
+  kind: "image" | "vector";
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  reason: ReflowTarget["reason"];
+};
 type ReflowPlan = {
   blocks: LayoutBlock[];
   movedBlocks: ReflowTarget[];
+  movedObjects: ReflowObjectTarget[];
   unresolvedCollisions: string[];
 };
 type EngineExtractImage = {
@@ -436,18 +459,6 @@ type EngineExtractPage = {
 };
 type EngineExtractResponse = {
   pages: EngineExtractPage[];
-};
-type SourceVectorItem = {
-  id: string;
-  pageId: string;
-  sourceVectorId: string;
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-  stroke?: string;
-  fill?: string;
-  strokeWidth?: number;
 };
 function bindCommandButton(id: string, commandId: string): void {
   const element = document.getElementById(id);
@@ -773,9 +784,8 @@ async function loadPdfBytes(bytes: Uint8Array, nextFileName: string, message: st
   lastBatchResult = null;
   selectedId = null;
   currentPageId = pageItems[0]?.id ?? null;
+  const hydrationToken = ++sourceObjectHydrationToken;
   await cacheSourceTextItems();
-  await cacheSourceImageItems(bytes);
-  await importExistingAnnotations();
   undoStack = [makeSnapshot()];
   redoStack = [];
   renderDocumentName();
@@ -783,6 +793,28 @@ async function loadPdfBytes(bytes: Uint8Array, nextFileName: string, message: st
   await renderWorkspace();
   renderInspector();
   showToast(message);
+  void hydrateSourceObjectsAndAnnotations(bytes, hydrationToken);
+}
+
+async function hydrateSourceObjectsAndAnnotations(bytes: Uint8Array, token: number): Promise<void> {
+  try {
+    await cacheSourceImageItems(bytes);
+    await importExistingAnnotations();
+    if (token !== sourceObjectHydrationToken) {
+      return;
+    }
+    undoStack = [makeSnapshot()];
+    redoStack = [];
+    semanticReflowPlanCache = null;
+    refreshFlowEffects();
+    renderCurrentLayer();
+    renderInspector();
+  } catch (error) {
+    if (token === sourceObjectHydrationToken) {
+      console.warn("PDF source object hydration failed", error);
+      showToast("PDF는 열렸지만 이미지/기존 주석 분석 일부가 지연되거나 실패했습니다.");
+    }
+  }
 }
 
 async function openPdfDocument(bytes: Uint8Array): Promise<pdfjs.PDFDocumentProxy> {
@@ -1210,7 +1242,8 @@ function renderAnnotation(annotation: Annotation, metrics: PageMetrics): Element
     node.style.color = annotation.color;
     node.style.fontSize = `${annotation.fontSize * zoom}px`;
     node.style.fontFamily = annotation.fontFamily ?? defaultEditorFontFamily();
-    node.style.lineHeight = "1.25";
+    node.style.lineHeight = `${annotation.lineHeight ?? 1.25}`;
+    node.style.textAlign = annotation.textAlign ?? "left";
     if (annotation.sourceTextId) {
       node.classList.add("source-edit");
     }
@@ -1228,7 +1261,8 @@ function renderAnnotation(annotation: Annotation, metrics: PageMetrics): Element
       textarea.style.background = "transparent";
       textarea.style.color = annotation.color;
       textarea.style.font = "inherit";
-      textarea.style.lineHeight = "1.25";
+      textarea.style.lineHeight = `${annotation.lineHeight ?? 1.25}`;
+      textarea.style.textAlign = annotation.textAlign ?? "left";
       textarea.addEventListener("pointerdown", (event) => event.stopPropagation());
       textarea.addEventListener("input", () => {
         annotation.text = textarea.value;
@@ -1466,6 +1500,8 @@ function renderSourceTextItem(item: SourceTextItem, metrics: PageMetrics): HTMLB
   button.className = `source-text${item.lineCount > 1 ? " block" : ""}`;
   button.textContent = item.text;
   button.ariaLabel = `기존 PDF 글씨 편집: ${item.text}`;
+  button.dataset.role = item.role ?? "body";
+  button.dataset.flowId = item.flowId ?? flowIdForRect(item);
   button.style.left = `${item.x * metrics.width}px`;
   button.style.top = `${item.y * metrics.height}px`;
   button.style.width = `${item.width * metrics.width}px`;
@@ -1548,6 +1584,7 @@ function renderCurrentLayer(): void {
 }
 
 function refreshFlowEffects(): void {
+  semanticReflowPlanCache = null;
   document.querySelectorAll<HTMLElement>(".annotation-layer").forEach((layer) => {
     const pageId = layer.dataset.pageId;
     const item = pageItems.find((candidate) => candidate.id === pageId);
@@ -1555,7 +1592,7 @@ function refreshFlowEffects(): void {
     if (!pageId || !item || !metrics) {
       return;
     }
-    layer.querySelectorAll(".source-mask, .source-text, .source-image, .flow-slice, .compare-region").forEach((node) => node.remove());
+    layer.querySelectorAll(".source-mask, .source-text, .source-image, .source-vector, .flow-slice, .compare-region").forEach((node) => node.remove());
     const flowSlices = pageFlowSlicesForPage(item.id);
     const pageIndex = pageItems.findIndex((candidate) => candidate.id === item.id);
     const flowNodes = [
@@ -1565,11 +1602,12 @@ function refreshFlowEffects(): void {
       ...(flowSlices.length > 0
         ? []
         : flowedSourceTextsForPage(item.id).map((flowedText) => renderFlowedSourceText(flowedText, metrics))),
+      ...flowedSourceObjectsForPage(item.id).map((flowedObject) => renderFlowedSourceObject(flowedObject, metrics)),
       ...(sourceImageItemsByPage.get(item.id) ?? [])
-        .filter((sourceImage) => !isSourceImageAlreadyEdited(sourceImage.id))
+        .filter((sourceImage) => !isSourceImageAlreadyEdited(sourceImage.id) && !semanticObjectReflowTarget(sourceImage.id))
         .map((sourceImage) => renderSourceImageItem(sourceImage, metrics)),
       ...(sourceVectorItemsByPage.get(item.id) ?? [])
-        .filter((sourceVector) => !isSourceVectorAlreadyEdited(sourceVector.id))
+        .filter((sourceVector) => !isSourceVectorAlreadyEdited(sourceVector.id) && !semanticObjectReflowTarget(sourceVector.id))
         .map((sourceVector) => renderSourceVectorItem(sourceVector, metrics)),
       ...(sourceTextItemsByPage.get(item.id) ?? [])
         .filter((sourceText) => !isSourceTextAlreadyEdited(sourceText.id) && !semanticReflowTarget(sourceText))
@@ -1623,6 +1661,10 @@ function renderLayerContents(layer: HTMLElement, item: PageItem, metrics: PageMe
     }
   }
 
+  for (const flowedObject of flowedSourceObjectsForPage(item.id)) {
+    layer.append(renderFlowedSourceObject(flowedObject, metrics));
+  }
+
   for (const sourceText of sourceTextItemsByPage.get(item.id) ?? []) {
     if (!isSourceTextAlreadyEdited(sourceText.id) && !semanticReflowTarget(sourceText)) {
       layer.append(renderSourceTextItem(sourceText, metrics));
@@ -1630,13 +1672,13 @@ function renderLayerContents(layer: HTMLElement, item: PageItem, metrics: PageMe
   }
 
   for (const sourceImage of sourceImageItemsByPage.get(item.id) ?? []) {
-    if (!isSourceImageAlreadyEdited(sourceImage.id)) {
+    if (!isSourceImageAlreadyEdited(sourceImage.id) && !semanticObjectReflowTarget(sourceImage.id)) {
       layer.append(renderSourceImageItem(sourceImage, metrics));
     }
   }
 
   for (const sourceVector of sourceVectorItemsByPage.get(item.id) ?? []) {
-    if (!isSourceVectorAlreadyEdited(sourceVector.id)) {
+    if (!isSourceVectorAlreadyEdited(sourceVector.id) && !semanticObjectReflowTarget(sourceVector.id)) {
       layer.append(renderSourceVectorItem(sourceVector, metrics));
     }
   }
@@ -1717,6 +1759,8 @@ function renderFlowedSourceText(flowedText: FlowedSourceText, metrics: PageMetri
   button.className = `source-text flowed-source-text${item.lineCount > 1 ? " block" : ""}`;
   button.textContent = item.text;
   button.ariaLabel = `재배치된 PDF 글씨 편집: ${item.text}`;
+  button.dataset.role = item.role ?? "body";
+  button.dataset.flowId = item.flowId ?? flowIdForRect(item);
   button.style.left = `${item.x * metrics.width}px`;
   button.style.top = `${flowedText.y * metrics.height}px`;
   button.style.width = `${item.width * metrics.width}px`;
@@ -1733,6 +1777,46 @@ function renderFlowedSourceText(flowedText: FlowedSourceText, metrics: PageMetri
     setActivePageMetrics(flowedText.pageId);
     updateCurrentPageIndicators();
     convertSourceTextToAnnotation(item);
+  });
+  return button;
+}
+
+function renderFlowedSourceObject(flowedObject: FlowedSourceObject, metrics: PageMetrics): HTMLButtonElement {
+  const item = flowedObject.item;
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = `${flowedObject.kind === "image" ? "source-image" : "source-vector"} flowed-source-object`;
+  button.ariaLabel = flowedObject.kind === "image" ? "재배치된 PDF 이미지 선택" : "재배치된 PDF 벡터 객체 선택";
+  button.style.left = `${flowedObject.x * metrics.width}px`;
+  button.style.top = `${flowedObject.y * metrics.height}px`;
+  button.style.width = `${item.width * metrics.width}px`;
+  button.style.height = `${item.height * metrics.height}px`;
+  button.title = flowedObject.kind === "image" ? "재배치된 기존 PDF 이미지" : "재배치된 기존 PDF 벡터 객체";
+  button.addEventListener("pointerdown", (event) => {
+    if (currentTool !== "select") {
+      return;
+    }
+    event.stopPropagation();
+    currentPageId = flowedObject.pageId;
+    setActivePageMetrics(flowedObject.pageId);
+    updateCurrentPageIndicators();
+    if (flowedObject.kind === "image" && "sourceImageId" in item) {
+      convertSourceImageToAnnotation(item, {
+        pageId: flowedObject.pageId,
+        x: flowedObject.x,
+        y: flowedObject.y,
+        width: item.width,
+        height: item.height,
+      });
+    } else if (flowedObject.kind === "vector" && "sourceVectorId" in item) {
+      convertSourceVectorToRedaction(item, {
+        pageId: flowedObject.pageId,
+        x: flowedObject.x,
+        y: flowedObject.y,
+        width: item.width,
+        height: item.height,
+      });
+    }
   });
   return button;
 }
@@ -1760,6 +1844,36 @@ function sourceMasksForPage(pageId: string): SourceMask[] {
         y: sourceText.y,
         width: sourceText.width,
         height: sourceText.height,
+      });
+    }
+  }
+
+  for (const image of sourceImageItemsByPage.get(pageId) ?? []) {
+    if (isSourceImageAlreadyEdited(image.id)) {
+      continue;
+    }
+    if (semanticObjectReflowTarget(image.id)) {
+      masks.push({
+        id: `${image.id}:object-flow-mask`,
+        x: image.x,
+        y: image.y,
+        width: image.width,
+        height: image.height,
+      });
+    }
+  }
+
+  for (const vector of sourceVectorItemsByPage.get(pageId) ?? []) {
+    if (isSourceVectorAlreadyEdited(vector.id)) {
+      continue;
+    }
+    if (semanticObjectReflowTarget(vector.id)) {
+      masks.push({
+        id: `${vector.id}:object-flow-mask`,
+        x: vector.x,
+        y: vector.y,
+        width: vector.width,
+        height: vector.height,
       });
     }
   }
@@ -1845,6 +1959,39 @@ function flowedSourceTextsForPage(pageId: string): FlowedSourceText[] {
   return flowed.sort((left, right) => left.y - right.y || left.item.x - right.item.x);
 }
 
+function flowedSourceObjectsForPage(pageId: string): FlowedSourceObject[] {
+  const flowed: FlowedSourceObject[] = [];
+  for (const target of semanticReflowPlan().movedObjects) {
+    if (target.pageId !== pageId) {
+      continue;
+    }
+    const image = target.kind === "image" ? sourceImageItemById(target.sourceObjectId) : null;
+    if (image) {
+      flowed.push({
+        id: `${image.id}:flowed-object`,
+        kind: "image",
+        item: image,
+        pageId,
+        x: target.x,
+        y: target.y,
+      });
+      continue;
+    }
+    const vector = target.kind === "vector" ? sourceVectorItemById(target.sourceObjectId) : null;
+    if (vector) {
+      flowed.push({
+        id: `${vector.id}:flowed-object`,
+        kind: "vector",
+        item: vector,
+        pageId,
+        x: target.x,
+        y: target.y,
+      });
+    }
+  }
+  return flowed.sort((left, right) => left.y - right.y || left.x - right.x);
+}
+
 function semanticReflowPlan(): ReflowPlan {
   const cacheKey = semanticReflowCacheKey();
   if (semanticReflowPlanCache?.key === cacheKey) {
@@ -1852,23 +1999,81 @@ function semanticReflowPlan(): ReflowPlan {
   }
   const blocks = layoutBlocksInDocument();
   const movedBlocks: ReflowTarget[] = [];
+  const movedObjects: ReflowObjectTarget[] = [];
   const unresolvedCollisions: string[] = [];
-  const sourceTextById = new Map<string, SourceTextItem>();
-  for (const items of sourceTextItemsByPage.values()) {
-    for (const item of items) {
-      sourceTextById.set(item.id, item);
+  const pageOrder = new Map(pageItems.map((item, index) => [item.id, index]));
+  const occupied = editedFlowOccupiedRects();
+  const objectCandidates = reflowObjectCandidates().sort((left, right) => {
+    const pageDelta = (pageOrder.get(left.pageId) ?? 0) - (pageOrder.get(right.pageId) ?? 0);
+    return pageDelta || left.bbox.y - right.bbox.y || left.bbox.x - right.bbox.x;
+  });
+  const movedObjectIds = new Set<string>();
+
+  for (const candidate of objectCandidates) {
+    const offset = sourceObjectFlowOffset(candidate.bbox, candidate.pageId);
+    if (offset === 0) {
+      continue;
+    }
+    const target = solveObjectReflowTarget(candidate, offset, blocks, occupied, movedObjectIds);
+    if (target.unresolved) {
+      unresolvedCollisions.push(target.unresolved);
+      continue;
+    }
+    if (target.pageId !== candidate.pageId || Math.abs(target.y - candidate.bbox.y) > 0.002) {
+      const objectTarget: ReflowObjectTarget = {
+        sourceObjectId: candidate.id,
+        sourcePageId: candidate.pageId,
+        pageId: target.pageId,
+        kind: candidate.kind,
+        x: candidate.bbox.x,
+        y: target.y,
+        width: candidate.bbox.width,
+        height: candidate.bbox.height,
+        reason: target.reason,
+      };
+      movedObjects.push(objectTarget);
+      movedObjectIds.add(candidate.id);
+      occupied.push({
+        pageId: target.pageId,
+        bbox: { x: candidate.bbox.x, y: target.y, width: candidate.bbox.width, height: candidate.groupHeight },
+        flowId: candidate.flowId,
+        sourceId: candidate.id,
+      });
+      for (const caption of candidate.captions) {
+        const captionY = clamp(target.y + (caption.y - candidate.bbox.y), 0, 1 - caption.height);
+        movedBlocks.push({
+          sourceTextId: caption.id,
+          sourcePageId: caption.pageId,
+          pageId: target.pageId,
+          y: captionY,
+          reason: target.reason,
+        });
+        occupied.push({
+          pageId: target.pageId,
+          bbox: { x: caption.x, y: captionY, width: caption.width, height: caption.height },
+          flowId: caption.flowId ?? flowIdForRect(caption),
+          sourceId: caption.id,
+        });
+      }
     }
   }
+  const sourceTexts = Array.from(sourceTextItemsByPage.values())
+    .flat()
+    .filter((item) => isReflowParticipant(item))
+    .sort((left, right) => {
+      const pageDelta = (pageOrder.get(left.pageId) ?? 0) - (pageOrder.get(right.pageId) ?? 0);
+      return pageDelta || left.y - right.y || left.x - right.x;
+    });
 
-  for (const item of sourceTextById.values()) {
-    if (isSourceTextAlreadyEdited(item.id) || !item.reflowable) {
+  for (const item of sourceTexts) {
+    if (isSourceTextAlreadyEdited(item.id)) {
       continue;
     }
     const offset = sourceTextFlowOffset(item);
     if (offset === 0) {
       continue;
     }
-    const target = solveReflowTarget(item, offset, blocks);
+    const target = solveReflowTarget(item, offset, blocks, occupied, movedObjectIds);
     if (target.unresolved) {
       unresolvedCollisions.push(target.unresolved);
       continue;
@@ -1881,16 +2086,49 @@ function semanticReflowPlan(): ReflowPlan {
         y: target.y,
         reason: target.reason,
       });
+      occupied.push({
+        pageId: target.pageId,
+        bbox: { x: item.x, y: target.y, width: item.width, height: item.height },
+        flowId: item.flowId ?? flowIdForRect(item),
+        sourceId: item.id,
+      });
     }
   }
 
-  const plan = { blocks, movedBlocks, unresolvedCollisions };
+  const plan = { blocks, movedBlocks, movedObjects, unresolvedCollisions };
   semanticReflowPlanCache = { key: cacheKey, plan };
   return plan;
 }
 
 function semanticReflowTarget(item: SourceTextItem): ReflowTarget | null {
   return semanticReflowPlan().movedBlocks.find((target) => target.sourceTextId === item.id) ?? null;
+}
+
+function semanticObjectReflowTarget(sourceObjectId: string): ReflowObjectTarget | null {
+  return semanticReflowPlan().movedObjects.find((target) => target.sourceObjectId === sourceObjectId) ?? null;
+}
+
+function isReflowParticipant(item: SourceTextItem): boolean {
+  const role = item.role ?? "body";
+  return role === "body" || role === "title";
+}
+
+function sourceTextSupportsSemanticReflow(item: SourceTextItem): boolean {
+  return isReflowParticipant(item);
+}
+
+function editedFlowOccupiedRects(): OccupiedFlowRect[] {
+  return sourceEditAnnotationsInDocument()
+    .filter((annotation) => isReflowSourceAnnotation(annotation))
+    .map((annotation) => {
+      const source = sourceTextForAnnotation(annotation);
+      return {
+        pageId: annotation.pageId,
+        bbox: { x: annotation.x, y: annotation.y, width: annotation.width, height: annotation.height },
+        flowId: source?.flowId ?? flowIdForRect(annotation),
+        sourceId: annotation.sourceTextId ?? annotation.id,
+      };
+    });
 }
 
 function semanticReflowCacheKey(): string {
@@ -1905,6 +2143,8 @@ function semanticReflowCacheKey(): string {
         annotation.width.toFixed(4),
         annotation.height.toFixed(4),
         annotation.fontSize,
+        annotation.lineHeight ?? "",
+        annotation.reflowMode ?? "",
         annotation.text.length,
       ].join(":");
     })
@@ -1960,14 +2200,16 @@ function layoutBlocksInDocument(): LayoutBlock[] {
   }
   for (const [pageId, texts] of sourceTextItemsByPage.entries()) {
     for (const text of texts) {
+      const role = text.role ?? "body";
+      const isProtectedText = role === "caption" || role === "header" || role === "footer" || role === "tableText";
       blocks.push({
         id: text.id,
         pageId,
-        type: "text",
+        type: role === "body" ? "text" : role,
         bbox: text,
-        flowId: flowIdForRect(text),
-        movable: text.reflowable,
-        protected: false,
+        flowId: text.flowId ?? flowIdForRect(text),
+        movable: isReflowParticipant(text),
+        protected: isProtectedText,
         sourceObjectId: text.id,
       });
     }
@@ -1976,14 +2218,7 @@ function layoutBlocksInDocument(): LayoutBlock[] {
 }
 
 function captionBlocksForImage(image: SourceImageItem): LayoutBlock[] {
-  const pageTexts = sourceTextItemsByPage.get(image.pageId) ?? [];
-  const captionPattern = /^(figure|fig\.|table|표|그림)\b/i;
-  return pageTexts
-    .filter((text) => {
-      const closeBelow = text.y >= image.y + image.height - 0.01 && text.y <= image.y + image.height + 0.08;
-      const overlap = horizontalOverlapRatio(text, image) >= 0.25;
-      return closeBelow && overlap && captionPattern.test(text.text.trim());
-    })
+  return captionTextsForImage(image)
     .map((text) => ({
       id: `${image.id}:caption:${text.id}`,
       pageId: image.pageId,
@@ -1997,10 +2232,74 @@ function captionBlocksForImage(image: SourceImageItem): LayoutBlock[] {
     }));
 }
 
+function captionTextsForImage(image: SourceImageItem): SourceTextItem[] {
+  const pageTexts = sourceTextItemsByPage.get(image.pageId) ?? [];
+  const captionPattern = /^(figure|fig\.|table|표|그림)\b/i;
+  return pageTexts.filter((text) => {
+    const closeBelow = text.y >= image.y + image.height - 0.01 && text.y <= image.y + image.height + 0.08;
+    const overlap = horizontalOverlapRatio(text, image) >= 0.25;
+    return closeBelow && overlap && captionPattern.test(text.text.trim());
+  });
+}
+
+type ReflowObjectCandidate = {
+  id: string;
+  pageId: string;
+  kind: "image" | "vector";
+  bbox: NormalizedRect;
+  flowId: string;
+  groupHeight: number;
+  captions: SourceTextItem[];
+};
+
+function reflowObjectCandidates(): ReflowObjectCandidate[] {
+  const candidates: ReflowObjectCandidate[] = [];
+  for (const images of sourceImageItemsByPage.values()) {
+    for (const image of images) {
+      if (isSourceImageAlreadyEdited(image.id)) {
+        continue;
+      }
+      const captions = captionTextsForImage(image);
+      const groupBottom = Math.max(
+        image.y + image.height,
+        ...captions.map((caption) => caption.y + caption.height),
+      );
+      candidates.push({
+        id: image.id,
+        pageId: image.pageId,
+        kind: "image",
+        bbox: image,
+        flowId: flowIdForRect(image),
+        groupHeight: groupBottom - image.y,
+        captions,
+      });
+    }
+  }
+  for (const vectors of sourceVectorItemsByPage.values()) {
+    for (const vector of vectors) {
+      if (isSourceVectorAlreadyEdited(vector.id)) {
+        continue;
+      }
+      candidates.push({
+        id: vector.id,
+        pageId: vector.pageId,
+        kind: "vector",
+        bbox: vector,
+        flowId: flowIdForRect(vector),
+        groupHeight: vector.height,
+        captions: [],
+      });
+    }
+  }
+  return candidates;
+}
+
 function solveReflowTarget(
   item: SourceTextItem,
   offset: number,
   blocks: LayoutBlock[],
+  occupied: OccupiedFlowRect[],
+  movedObjectIds: Set<string>,
 ): { pageId: string; y: number; reason: ReflowTarget["reason"]; unresolved?: string } {
   const startPageIndex = pageItems.findIndex((page) => page.id === item.pageId);
   if (startPageIndex < 0) {
@@ -2030,7 +2329,7 @@ function solveReflowTarget(
       };
     }
     const flowTop = targetPageIndex === startPageIndex ? proposedY : nextPageFlowTop(page.id, item);
-    const solvedY = avoidProtectedBlocks(page.id, item, flowTop, blocks);
+    const solvedY = avoidFlowObstacles(page.id, item, flowTop, blocks, occupied, movedObjectIds);
     if (solvedY.reason === "protected-block") {
       reason = "protected-block";
     }
@@ -2049,18 +2348,92 @@ function solveReflowTarget(
   };
 }
 
-function avoidProtectedBlocks(
+function solveObjectReflowTarget(
+  candidate: ReflowObjectCandidate,
+  offset: number,
+  blocks: LayoutBlock[],
+  occupied: OccupiedFlowRect[],
+  movedObjectIds: Set<string>,
+): { pageId: string; y: number; reason: ReflowTarget["reason"]; unresolved?: string } {
+  const startPageIndex = pageItems.findIndex((page) => page.id === candidate.pageId);
+  if (startPageIndex < 0) {
+    return {
+      pageId: candidate.pageId,
+      y: candidate.bbox.y,
+      reason: "height-delta",
+      unresolved: "재흐름 대상 객체의 페이지를 찾을 수 없습니다.",
+    };
+  }
+  let targetPageIndex = startPageIndex;
+  let proposedY = candidate.bbox.y + offset;
+  let reason: ReflowTarget["reason"] = "height-delta";
+  const maxIterations = pageItems.length - startPageIndex + 1;
+
+  for (let iteration = 0; iteration < maxIterations; iteration += 1) {
+    const page = pageItems[targetPageIndex];
+    if (!page) {
+      return {
+        pageId: candidate.pageId,
+        y: candidate.bbox.y,
+        reason,
+        unresolved: `${candidate.kind === "image" ? "이미지" : "벡터 객체"}를 배치할 다음 페이지 공간이 없습니다.`,
+      };
+    }
+    const flowTop = targetPageIndex === startPageIndex
+      ? proposedY
+      : nextPageObjectFlowTop(page.id, candidate);
+    const solvedY = avoidObjectObstacles(page.id, candidate, flowTop, blocks, occupied, movedObjectIds);
+    if (solvedY.reason === "protected-block") {
+      reason = "protected-block";
+    }
+    if (solvedY.y + candidate.groupHeight <= pageFlowBottomForFlow(page.id, candidate.flowId)) {
+      return { pageId: page.id, y: clamp(solvedY.y, 0, 1 - candidate.bbox.height), reason };
+    }
+    targetPageIndex += 1;
+    proposedY = nextPageObjectFlowTop(pageItems[targetPageIndex]?.id ?? candidate.pageId, candidate);
+    reason = "page-overflow";
+  }
+
+  return {
+    pageId: candidate.pageId,
+    y: candidate.bbox.y,
+    reason,
+    unresolved: `${candidate.kind === "image" ? "이미지" : "벡터 객체"}의 페이지 넘김을 해결할 수 없습니다.`,
+  };
+}
+
+function avoidFlowObstacles(
   pageId: string,
   item: SourceTextItem,
   initialY: number,
   blocks: LayoutBlock[],
+  occupied: OccupiedFlowRect[],
+  movedObjectIds: Set<string>,
 ): { y: number; reason: ReflowTarget["reason"] } {
   let y = Math.max(0, initialY);
   let reason: ReflowTarget["reason"] = "height-delta";
+  const itemFlowId = item.flowId ?? flowIdForRect(item);
   const protectedBlocks = blocks
-    .filter((block) => block.pageId === pageId && block.protected && horizontalOverlapRatio(item, block.bbox) >= 0.18)
+    .filter((block) => {
+      if (block.pageId !== pageId || !block.protected || horizontalOverlapRatio(item, block.bbox) < 0.18) {
+        return false;
+      }
+      if (movedObjectIds.has(block.id) || (block.groupId && movedObjectIds.has(block.groupId))) {
+        return false;
+      }
+      return true;
+    })
     .sort((left, right) => left.bbox.y - right.bbox.y);
-  for (const block of protectedBlocks) {
+  const occupiedBlocks = occupied
+    .filter((block) => block.pageId === pageId && block.flowId === itemFlowId && block.sourceId !== item.id)
+    .map((block) => ({
+      id: block.sourceId,
+      pageId: block.pageId,
+      bbox: block.bbox,
+      protected: true,
+    }))
+    .sort((left, right) => left.bbox.y - right.bbox.y);
+  for (const block of [...protectedBlocks, ...occupiedBlocks].sort((left, right) => left.bbox.y - right.bbox.y)) {
     const rect = { x: item.x, y, width: item.width, height: item.height };
     if (normalizedOverlapAreaRatio(rect, block.bbox) > 0.001 || (y < block.bbox.y && y + item.height > block.bbox.y)) {
       y = block.bbox.y + block.bbox.height + 0.012;
@@ -2070,9 +2443,54 @@ function avoidProtectedBlocks(
   return { y, reason };
 }
 
+function avoidObjectObstacles(
+  pageId: string,
+  candidate: ReflowObjectCandidate,
+  initialY: number,
+  blocks: LayoutBlock[],
+  occupied: OccupiedFlowRect[],
+  movedObjectIds: Set<string>,
+): { y: number; reason: ReflowTarget["reason"] } {
+  let y = Math.max(0, initialY);
+  let reason: ReflowTarget["reason"] = "height-delta";
+  const rectForY = () => ({
+    x: candidate.bbox.x,
+    y,
+    width: candidate.bbox.width,
+    height: candidate.groupHeight,
+  });
+  const fixedBlocks = blocks
+    .filter((block) => {
+      if (block.pageId !== pageId || !block.protected || block.id === candidate.id || block.groupId === candidate.id) {
+        return false;
+      }
+      if (movedObjectIds.has(block.id) || (block.groupId && movedObjectIds.has(block.groupId))) {
+        return false;
+      }
+      if (sourceObjectFlowOffset(block.bbox, block.pageId) !== 0) {
+        return false;
+      }
+      return horizontalOverlapRatio(candidate.bbox, block.bbox) >= 0.18;
+    })
+    .sort((left, right) => left.bbox.y - right.bbox.y);
+  const occupiedBlocks = occupied
+    .filter((block) => block.pageId === pageId && block.flowId === candidate.flowId && block.sourceId !== candidate.id)
+    .sort((left, right) => left.bbox.y - right.bbox.y);
+
+  for (const block of [...fixedBlocks.map((block) => block.bbox), ...occupiedBlocks.map((block) => block.bbox)].sort((left, right) => left.y - right.y)) {
+    const rect = rectForY();
+    if (normalizedOverlapAreaRatio(rect, block) > 0.001 || (y < block.y && y + candidate.groupHeight > block.y)) {
+      y = block.y + block.height + 0.012;
+      reason = "protected-block";
+    }
+  }
+  return { y, reason };
+}
+
 function nextPageFlowTop(pageId: string, item: SourceTextItem): number {
+  const itemFlowId = item.flowId ?? flowIdForRect(item);
   const pageTexts = (sourceTextItemsByPage.get(pageId) ?? []).filter((text) => {
-    return text.reflowable && horizontalOverlapRatio(text, item) >= 0.25;
+    return isReflowParticipant(text) && (text.flowId ?? flowIdForRect(text)) === itemFlowId;
   });
   if (pageTexts.length === 0) {
     return clamp(item.y < 0.2 ? item.y : 0.08, 0.04, 0.86);
@@ -2081,14 +2499,36 @@ function nextPageFlowTop(pageId: string, item: SourceTextItem): number {
 }
 
 function pageFlowBottom(pageId: string, item: SourceTextItem): number {
+  const itemFlowId = item.flowId ?? flowIdForRect(item);
   const pageTexts = (sourceTextItemsByPage.get(pageId) ?? []).filter((text) => {
-    return text.reflowable && horizontalOverlapRatio(text, item) >= 0.25;
+    return (text.flowId ?? flowIdForRect(text)) === itemFlowId;
   });
-  const footerCandidates = pageTexts.filter((text) => text.y > 0.88);
+  const footerCandidates = pageTexts.filter((text) => text.role === "footer" || text.y > 0.88);
   if (footerCandidates.length > 0) {
     return Math.max(0.75, Math.min(...footerCandidates.map((text) => text.y)) - 0.018);
   }
   return 0.94;
+}
+
+function pageFlowBottomForFlow(pageId: string, flowId: string): number {
+  const pageTexts = (sourceTextItemsByPage.get(pageId) ?? []).filter((text) => {
+    return (text.flowId ?? flowIdForRect(text)) === flowId;
+  });
+  const footerCandidates = pageTexts.filter((text) => text.role === "footer" || text.y > 0.88);
+  if (footerCandidates.length > 0) {
+    return Math.max(0.75, Math.min(...footerCandidates.map((text) => text.y)) - 0.018);
+  }
+  return 0.94;
+}
+
+function nextPageObjectFlowTop(pageId: string, candidate: ReflowObjectCandidate): number {
+  const pageTexts = (sourceTextItemsByPage.get(pageId) ?? []).filter((text) => {
+    return isReflowParticipant(text) && (text.flowId ?? flowIdForRect(text)) === candidate.flowId;
+  });
+  if (pageTexts.length === 0) {
+    return clamp(candidate.bbox.y < 0.2 ? candidate.bbox.y : 0.08, 0.04, 0.86);
+  }
+  return clamp(Math.min(...pageTexts.map((text) => text.y)), 0.04, 0.86);
 }
 
 function flowIdForRect(rect: { x: number; width: number }): string {
@@ -2122,7 +2562,7 @@ function sourceEditAnnotationsInDocument(): TextAnnotation[] {
 }
 
 function sourceTextFlowOffset(sourceText: SourceTextItem): number {
-  if (!sourceText.reflowable) {
+  if (!isReflowParticipant(sourceText)) {
     return 0;
   }
   const sourcePageIndex = pageItems.findIndex((item) => item.id === sourceText.pageId);
@@ -2139,6 +2579,32 @@ function sourceTextFlowOffset(sourceText: SourceTextItem): number {
     if (annotationPageIndex >= 0 && annotationPageIndex < sourcePageIndex) {
       offset += crossPageOverflowOffset(annotation);
     } else if (annotation.pageId === sourceText.pageId && isBelowSameFlow(sourceText, annotation)) {
+      offset += delta;
+    }
+  }
+  return Math.abs(offset) < 0.002 ? 0 : offset;
+}
+
+function sourceObjectFlowOffset(rect: NormalizedRect, pageId?: string): number {
+  const rectPageId = pageId ?? ("pageId" in rect ? String(rect.pageId) : "");
+  const sourcePageIndex = pageItems.findIndex((item) => item.id === rectPageId);
+  if (!rectPageId || sourcePageIndex < 0) {
+    return 0;
+  }
+  let offset = 0;
+  for (const annotation of sourceEditAnnotationsInDocument()) {
+    if (!annotation.eraseOriginal || !isReflowSourceAnnotation(annotation)) {
+      continue;
+    }
+    const sourceText = sourceTextForAnnotation(annotation);
+    if ((sourceText?.role ?? "unsupported") !== "body") {
+      continue;
+    }
+    const annotationPageIndex = pageItems.findIndex((item) => item.id === annotation.pageId);
+    const delta = annotation.height - annotation.eraseOriginal.height;
+    if (annotationPageIndex >= 0 && annotationPageIndex < sourcePageIndex) {
+      offset += crossPageOverflowOffset(annotation);
+    } else if (annotation.pageId === rectPageId && isBelowSameFlowRect(rect, annotation)) {
       offset += delta;
     }
   }
@@ -2171,6 +2637,10 @@ function isBelowSameFlow(sourceText: SourceTextItem, annotation: TextAnnotation)
   if (!original || !sourceText.reflowable || !isReflowSourceAnnotation(annotation)) {
     return false;
   }
+  const annotationSource = sourceTextForAnnotation(annotation);
+  if (annotationSource && (sourceText.flowId ?? flowIdForRect(sourceText)) !== (annotationSource.flowId ?? flowIdForRect(annotationSource))) {
+    return false;
+  }
   const originalBottom = original.y + original.height;
   if (sourceText.y < originalBottom - Math.max(sourceText.height, original.height) * 0.2) {
     return false;
@@ -2187,7 +2657,36 @@ function isBelowSameFlow(sourceText: SourceTextItem, annotation: TextAnnotation)
   return sameColumnLeft || sourceInsideOriginalColumn;
 }
 
+function isBelowSameFlowRect(rect: NormalizedRect, annotation: TextAnnotation): boolean {
+  const original = annotation.eraseOriginal;
+  if (!original || !isReflowSourceAnnotation(annotation)) {
+    return false;
+  }
+  const annotationSource = sourceTextForAnnotation(annotation);
+  const rectFlowId = flowIdForRect(rect);
+  if (annotationSource && rectFlowId !== (annotationSource.flowId ?? flowIdForRect(annotationSource))) {
+    return false;
+  }
+  const originalBottom = original.y + original.height;
+  if (rect.y < originalBottom - Math.max(rect.height, original.height) * 0.2) {
+    return false;
+  }
+  const overlap = horizontalOverlapRatio(rect, original);
+  if (overlap < 0.2) {
+    return false;
+  }
+  const leftTolerance = Math.max(0.035, original.width * 0.16);
+  const sameColumnLeft = Math.abs(rect.x - original.x) <= leftTolerance;
+  const rectInsideOriginalColumn =
+    rect.x >= original.x - leftTolerance &&
+    rect.x + rect.width <= original.x + original.width + leftTolerance;
+  return sameColumnLeft || rectInsideOriginalColumn || rectFlowId === (annotationSource?.flowId ?? flowIdForRect(original));
+}
+
 function isReflowSourceAnnotation(annotation: TextAnnotation): boolean {
+  if (annotation.reflowMode === "replaceOnly") {
+    return false;
+  }
   if (annotation.reflowable !== undefined) {
     return annotation.reflowable;
   }
@@ -2196,7 +2695,7 @@ function isReflowSourceAnnotation(annotation: TextAnnotation): boolean {
   }
   return sourceTextItemsByPage
     .get(annotation.pageId)
-    ?.some((sourceText) => sourceText.id === annotation.sourceTextId && sourceText.reflowable) ?? false;
+    ?.some((sourceText) => sourceText.id === annotation.sourceTextId && sourceTextSupportsSemanticReflow(sourceText)) ?? false;
 }
 
 function horizontalOverlapRatio(
@@ -2253,7 +2752,10 @@ function convertSourceTextToAnnotation(item: SourceTextItem): void {
     fontSize: Math.round(item.fontSize),
     fontFamily: item.fontFamily,
     fontName: item.fontName,
-    reflowable: item.reflowable,
+    textAlign: "left",
+    lineHeight: 1.25,
+    reflowMode: sourceTextSupportsSemanticReflow(item) ? "semantic" : "replaceOnly",
+    reflowable: sourceTextSupportsSemanticReflow(item),
     sourceTextId: item.id,
     eraseOriginal: {
       x: item.x,
@@ -2318,7 +2820,7 @@ async function cacheSourceTextItems(): Promise<void> {
       });
     }
 
-    sourceTextItemsByPage.set(pageItem.id, mergeTextItemsIntoBlocks(sourceItems));
+    sourceTextItemsByPage.set(pageItem.id, classifyParagraphBlocks(mergeTextItemsIntoBlocks(sourceItems)));
   }
 }
 
@@ -2691,6 +3193,52 @@ function mergeTextItemsIntoBlocks(items: SourceTextItem[]): SourceTextItem[] {
   return mergeLinesIntoBlocks(lines);
 }
 
+function classifyParagraphBlocks(blocks: SourceTextItem[]): SourceTextItem[] {
+  const reflowableBlocks = blocks.filter((block) => block.reflowable);
+  const sortedFontSizes = reflowableBlocks.map((block) => block.fontSize).sort((a, b) => a - b);
+  const medianFontSize = sortedFontSizes.length
+    ? sortedFontSizes[Math.floor(sortedFontSizes.length / 2)]
+    : 12;
+  return blocks.map((block) => {
+    const role = classifyTextBlockRole(block, medianFontSize);
+    const flowId = role === "body" || role === "title"
+      ? flowIdForRect(block)
+      : `${role}:${flowIdForRect(block)}`;
+    const semanticReflowable = role === "body" || role === "title";
+    return {
+      ...block,
+      role,
+      flowId,
+      reflowable: semanticReflowable,
+    };
+  });
+}
+
+function classifyTextBlockRole(block: SourceTextItem, medianFontSize: number): SourceTextItem["role"] {
+  const text = block.text.trim();
+  const lower = text.toLowerCase();
+  if (block.y < 0.055 && block.height < 0.06) {
+    return "header";
+  }
+  if (/^(figure|fig\.|table|표|그림)\s*\d+[\s.:)-]/i.test(text)) {
+    return "caption";
+  }
+  if (/\b(fig(?:ure)?\.?|table)\s+\d+[\s.:)-]/i.test(lower)) {
+    return "caption";
+  }
+  if (block.y > 0.89 || /^[\s-]*\d+[\s-]*$/.test(text)) {
+    return "footer";
+  }
+  if (block.lineCount <= 2 && block.y < 0.28 && block.fontSize >= medianFontSize * 1.22) {
+    return "title";
+  }
+  const rowLike = (text.match(/\s{2,}|\t/g) ?? []).length >= 2 || /(\d+[.,]){2,}/.test(text);
+  if (rowLike && block.height < 0.08) {
+    return "tableText";
+  }
+  return "body";
+}
+
 function mergeTextItemsIntoLines(items: SourceTextItem[]): SourceTextItem[] {
   const sorted = [...items].sort((a, b) => a.y - b.y || a.x - b.x);
   const rows: SourceTextItem[][] = [];
@@ -2908,12 +3456,15 @@ function sourceTextToAnnotation(sourceText: SourceTextItem): TextAnnotation {
     fontSize: sourceText.fontSize,
     fontFamily: sourceText.fontFamily,
     fontName: sourceText.fontName,
-    reflowable: sourceText.reflowable,
+    textAlign: "left",
+    lineHeight: 1.25,
+    reflowMode: sourceTextSupportsSemanticReflow(sourceText) ? "semantic" : "replaceOnly",
+    reflowable: sourceTextSupportsSemanticReflow(sourceText),
     sourceTextId: sourceText.id,
   };
 }
 
-function convertSourceImageToAnnotation(item: SourceImageItem): void {
+function convertSourceImageToAnnotation(item: SourceImageItem, target?: NormalizedRect & { pageId: string }): void {
   const existing = annotations.find((annotation) => annotation.sourceImageId === item.id);
   if (existing) {
     selectedId = existing.id;
@@ -2923,12 +3474,12 @@ function convertSourceImageToAnnotation(item: SourceImageItem): void {
   }
   const annotation: ImageAnnotation = {
     id: crypto.randomUUID(),
-    pageId: item.pageId,
+    pageId: target?.pageId ?? item.pageId,
     type: "image",
-    x: item.x,
-    y: item.y,
-    width: item.width,
-    height: item.height,
+    x: target?.x ?? item.x,
+    y: target?.y ?? item.y,
+    width: target?.width ?? item.width,
+    height: target?.height ?? item.height,
     color: "#176b58",
     opacity: 1,
     strokeWidth: 1,
@@ -2942,18 +3493,18 @@ function convertSourceImageToAnnotation(item: SourceImageItem): void {
   renderCurrentLayer();
 }
 
-function convertSourceVectorToRedaction(item: SourceVectorItem): void {
+function convertSourceVectorToRedaction(item: SourceVectorItem, target?: NormalizedRect & { pageId: string }): void {
   if (isSourceVectorAlreadyEdited(item.id)) {
     return;
   }
   const annotation: BoxAnnotation = {
     id: crypto.randomUUID(),
-    pageId: item.pageId,
+    pageId: target?.pageId ?? item.pageId,
     type: "redact",
-    x: item.x,
-    y: item.y,
-    width: item.width,
-    height: item.height,
+    x: target?.x ?? item.x,
+    y: target?.y ?? item.y,
+    width: target?.width ?? item.width,
+    height: target?.height ?? item.height,
     color: "#ffffff",
     opacity: 1,
     strokeWidth: 1,
@@ -3054,6 +3605,9 @@ function addText(pageId: string, x: number, y: number, metrics = fallbackMetrics
     strokeWidth: 1,
     text: "텍스트",
     fontSize: 18,
+    textAlign: "left",
+    lineHeight: 1.25,
+    reflowMode: "replaceOnly",
   };
   autoFitText(annotation);
   annotations.push(annotation);
@@ -3267,7 +3821,7 @@ function renderInspector(): void {
       ${documentControls}
       ${warningPanel}
       ${pageControls}
-      <p class="status-line">기존 글씨는 안전 교체 방식으로 편집합니다. 문단 재흐름은 이미지/도표 충돌 검증을 통과해야 저장됩니다.</p>
+      <p class="status-line">기존 글씨는 문단 단위로 재배치하고 PDF 구조에 검색 가능한 텍스트로 저장합니다.</p>
     `;
     bindDocumentControls();
     bindPageControls();
@@ -3277,23 +3831,14 @@ function renderInspector(): void {
   body.innerHTML = `
     ${documentControls}
     ${warningPanel}
-    ${pageControls}
     ${selected.type === "text" ? textFields(selected) : ""}
+    ${selected.type === "image" ? imageFields(selected) : ""}
     ${selected.type === "formField" ? renderFormFieldInspector(selected, escapeHtml) : ""}
     ${renderSourceObjectInspector(selected)}
-    ${selected.type !== "image" && selected.type !== "formField" ? colorField(selected) : ""}
+    ${selected.type !== "text" && selected.type !== "image" && selected.type !== "formField" ? colorField(selected) : ""}
     ${selected.type !== "text" && selected.type !== "image" && selected.type !== "formField" ? opacityField(selected) : ""}
     ${selected.type === "pen" || selected.type === "rect" ? strokeField(selected) : ""}
-    <div class="field-row">
-      <div class="field">
-        <label>X</label>
-        <input id="posX" type="number" min="0" max="100" step="1" value="${Math.round(selected.x * 100)}" />
-      </div>
-      <div class="field">
-        <label>Y</label>
-        <input id="posY" type="number" min="0" max="100" step="1" value="${Math.round(selected.y * 100)}" />
-      </div>
-    </div>
+    ${positionFields(selected)}
     ${selected.type !== "pen" ? sizeFields(selected) : ""}
     <div class="mini-actions">
       <button id="duplicateSelected" type="button"${selected.sourceImageId && selected.type === "image" ? ' disabled title="기존 PDF 이미지는 먼저 이동/교체 편집으로 확정한 뒤 복제할 수 있습니다."' : ""}>복제</button>
@@ -3306,14 +3851,40 @@ function renderInspector(): void {
 }
 
 function documentFields(): string {
+  const currentIndex = pageItems.findIndex((item) => item.id === currentPageId);
+  const exportStatus = layoutCollisionWarnings().length > 0
+    ? "레이아웃 해결 필요"
+    : requiresPdfEngineForSafeExport()
+      ? "엔진 저장 필요"
+      : "기본 저장 가능";
+  const sectionOpen = (section: string): string => advancedSectionOpenState[section] ? " open" : "";
   return `
-    <div class="field">
-      <label>저장 방식</label>
-      <select id="saveMode">
-        <option value="flatten"${saveMode === "flatten" ? " selected" : ""}>Flatten content stream</option>
-        <option value="native"${saveMode === "native" ? " selected" : ""}>Native PDF annotations</option>
-      </select>
-    </div>
+    <section class="inspector-section" data-inspector-section="document">
+      <div class="field compact-field">
+        <label>문서명</label>
+        <strong>${escapeHtml(fileName)}</strong>
+      </div>
+      <div class="field-row">
+        <div class="field compact-field">
+          <label>현재 페이지</label>
+          <span>${currentIndex >= 0 ? currentIndex + 1 : 0} / ${pageItems.length}</span>
+        </div>
+        <div class="field compact-field">
+          <label>확대</label>
+          <span>${Math.round(zoom * 100)}%</span>
+        </div>
+      </div>
+      <div class="field">
+        <label>저장 방식</label>
+        <select id="saveMode">
+          <option value="flatten"${saveMode === "flatten" ? " selected" : ""}>Flatten content stream</option>
+          <option value="native"${saveMode === "native" ? " selected" : ""}>Native PDF annotations</option>
+        </select>
+      </div>
+      <p class="status-line">Export: ${escapeHtml(exportStatus)}</p>
+    </section>
+    <details id="advancedToolsPanel" class="metadata-panel product-tool-panel" data-inspector-section="advanced"${advancedToolsOpen ? " open" : ""}>
+      <summary>고급 도구</summary>
     <div class="field">
       <label>가리기 정책</label>
       <select id="redactionMode">
@@ -3334,7 +3905,7 @@ function documentFields(): string {
       <button id="preflightFixupButton" type="button">PDF/X-3 수정</button>
     </div>
     ${lastPreflightReport ? renderPreflightPanel(lastPreflightReport, escapeHtml) : ""}
-    <details class="metadata-panel product-tool-panel" open>
+    <details class="metadata-panel product-tool-panel" data-advanced-section="ocr"${sectionOpen("ocr")}>
       <summary>OCR / 스캔 PDF</summary>
       <div class="field">
         <label>OCR 언어</label>
@@ -3359,7 +3930,7 @@ function documentFields(): string {
       </div>
       ${lastOcrStatus ? `<p class="status-line">Tesseract ${escapeHtml(lastOcrStatus.version || "unknown")} · 누락 언어 ${lastOcrStatus.missingLanguages.length}</p>` : ""}
     </details>
-    <details class="metadata-panel product-tool-panel" open>
+    <details class="metadata-panel product-tool-panel" data-advanced-section="signature"${sectionOpen("signature")}>
       <summary>인증서 서명 / 보안</summary>
       <div class="mini-actions">
         <button id="selectCertificateButton" type="button">인증서 선택</button>
@@ -3393,7 +3964,7 @@ function documentFields(): string {
       </div>
       ${lastSignatureValidation ? signatureValidationSummary(lastSignatureValidation) : ""}
     </details>
-    <details class="metadata-panel product-tool-panel" open>
+    <details class="metadata-panel product-tool-panel" data-advanced-section="accessibility"${sectionOpen("accessibility")}>
       <summary>접근성 기본 수리</summary>
       <div class="field">
         <label>문서 언어</label>
@@ -3408,7 +3979,7 @@ function documentFields(): string {
       </div>
       <p class="status-line">PDF/UA 완전 검증이 아니라 제목, 언어, 태그 신호, 탭 순서, 이미지 alt text 기본 수리입니다.</p>
     </details>
-    <details class="metadata-panel product-tool-panel" open>
+    <details class="metadata-panel product-tool-panel" data-advanced-section="compare-batch"${sectionOpen("compare-batch")}>
       <summary>비교 / 배치 자동화</summary>
       <div class="mini-actions">
         <button id="selectCompareButton" type="button">비교 PDF 선택</button>
@@ -3450,7 +4021,7 @@ function documentFields(): string {
       </div>
       ${lastBatchResult ? batchResultSummary(lastBatchResult) : ""}
     </details>
-    <details class="metadata-panel" open>
+    <details class="metadata-panel" data-advanced-section="metadata"${sectionOpen("metadata")}>
       <summary>문서 메타데이터</summary>
       <div class="field">
         <label>제목</label>
@@ -3468,6 +4039,7 @@ function documentFields(): string {
         <label>키워드</label>
         <input id="metaKeywords" type="text" value="${escapeHtml(documentMetadata.keywords)}" />
       </div>
+    </details>
     </details>
   `;
 }
@@ -3540,13 +4112,80 @@ function renderSourceObjectInspector(annotation: Annotation): string {
 
 function textFields(annotation: TextAnnotation): string {
   return `
+    <section class="inspector-section" data-inspector-section="text">
     <div class="field">
       <label>텍스트</label>
       <textarea id="textValue">${escapeHtml(annotation.text)}</textarea>
     </div>
     <div class="field">
+      <label>글꼴</label>
+      <input id="fontFamily" type="text" value="${escapeHtml(annotation.fontFamily ?? defaultEditorFontFamily())}" />
+    </div>
+    <div class="field">
       <label>글자 크기</label>
       <input id="fontSize" type="number" min="8" max="96" step="1" value="${annotation.fontSize}" />
+    </div>
+    <div class="field">
+      <label>색상</label>
+      <input id="colorValue" type="color" value="${annotation.color}" />
+    </div>
+    <div class="field-row">
+      <div class="field">
+        <label>정렬</label>
+        <select id="textAlign">
+          <option value="left"${(annotation.textAlign ?? "left") === "left" ? " selected" : ""}>왼쪽</option>
+          <option value="center"${annotation.textAlign === "center" ? " selected" : ""}>가운데</option>
+          <option value="right"${annotation.textAlign === "right" ? " selected" : ""}>오른쪽</option>
+        </select>
+      </div>
+      <div class="field">
+        <label>줄간격</label>
+        <input id="lineHeight" type="number" min="1" max="2.4" step="0.05" value="${annotation.lineHeight ?? 1.25}" />
+      </div>
+    </div>
+    <div class="field">
+      <label>Reflow mode</label>
+      <select id="reflowMode">
+        <option value="semantic"${(annotation.reflowMode ?? "semantic") === "semantic" ? " selected" : ""}>Semantic paragraph reflow</option>
+        <option value="replaceOnly"${annotation.reflowMode === "replaceOnly" ? " selected" : ""}>Replace only</option>
+      </select>
+    </div>
+    </section>
+  `;
+}
+
+function imageFields(annotation: ImageAnnotation): string {
+  return `
+    <section class="inspector-section" data-inspector-section="image">
+      <p class="status-line">${annotation.sourceImageId ? "기존 PDF 이미지 선택: 위치/크기 변경 시 moveImage로 저장합니다." : "삽입 이미지"}</p>
+      <div class="field-row">
+        <div class="field">
+          <label>회전</label>
+          <input type="number" value="0" disabled title="기존 이미지 회전은 native object editor 단계에서만 지원합니다." />
+        </div>
+        <div class="field">
+          <label>자르기</label>
+          <button type="button" disabled title="이미지 crop은 현재 기본 편집 lockdown 범위 밖입니다.">자르기</button>
+        </div>
+      </div>
+      <div class="mini-actions">
+        <button type="button" disabled title="기존 이미지 교체는 이번 Core Editing UX Lockdown 범위 밖입니다.">교체</button>
+      </div>
+    </section>
+  `;
+}
+
+function positionFields(annotation: Annotation): string {
+  return `
+    <div class="field-row">
+      <div class="field">
+        <label>X</label>
+        <input id="posX" type="number" min="0" max="100" step="1" value="${Math.round(annotation.x * 100)}" />
+      </div>
+      <div class="field">
+        <label>Y</label>
+        <input id="posY" type="number" min="0" max="100" step="1" value="${Math.round(annotation.y * 100)}" />
+      </div>
     </div>
   `;
 }
@@ -3603,6 +4242,7 @@ function bindPageControls(): void {
 }
 
 function bindDocumentControls(): void {
+  bindAdvancedDetailsState();
   const saveModeField = document.querySelector<HTMLSelectElement>("#saveMode");
   saveModeField?.addEventListener("change", () => {
     saveMode = saveModeField.value === "native" ? "native" : "flatten";
@@ -3645,6 +4285,22 @@ function bindDocumentControls(): void {
   byId<HTMLButtonElement>("selectCertificateButton")?.addEventListener("click", () => dom.certificateInput.click());
   byId<HTMLButtonElement>("selectCertificateKeyButton")?.addEventListener("click", () => dom.certificateKeyInput.click());
   byId<HTMLButtonElement>("selectCompareButton")?.addEventListener("click", () => dom.compareInput.click());
+}
+
+function bindAdvancedDetailsState(): void {
+  const panel = document.querySelector<HTMLDetailsElement>("#advancedToolsPanel");
+  panel?.addEventListener("toggle", () => {
+    advancedToolsOpen = panel.open;
+  });
+  document.querySelectorAll<HTMLDetailsElement>("#advancedToolsPanel details[data-advanced-section]").forEach((details) => {
+    const section = details.dataset.advancedSection;
+    if (!section) {
+      return;
+    }
+    details.addEventListener("toggle", () => {
+      advancedSectionOpenState[section] = details.open;
+    });
+  });
 }
 
 function bindDocumentToolFields(): void {
@@ -3860,6 +4516,52 @@ function bindInspectorFields(annotation: Annotation): void {
       annotation.fontSize = clamp(Number(fontSize.value), 8, 96);
       markAnnotationDirty(annotation);
       autoFitText(annotation);
+      commitHistory();
+      renderInspector();
+      renderCurrentLayer();
+    }
+  });
+
+  const fontFamily = document.querySelector<HTMLInputElement>("#fontFamily");
+  fontFamily?.addEventListener("change", () => {
+    if (annotation.type === "text") {
+      annotation.fontFamily = fontFamily.value.trim() || defaultEditorFontFamily();
+      markAnnotationDirty(annotation);
+      autoFitText(annotation);
+      commitHistory();
+      renderInspector();
+      renderCurrentLayer();
+    }
+  });
+
+  const textAlign = document.querySelector<HTMLSelectElement>("#textAlign");
+  textAlign?.addEventListener("change", () => {
+    if (annotation.type === "text") {
+      annotation.textAlign = textAlign.value === "center" || textAlign.value === "right" ? textAlign.value : "left";
+      markAnnotationDirty(annotation);
+      commitHistory();
+      renderCurrentLayer();
+    }
+  });
+
+  const lineHeight = document.querySelector<HTMLInputElement>("#lineHeight");
+  lineHeight?.addEventListener("change", () => {
+    if (annotation.type === "text") {
+      annotation.lineHeight = clamp(Number(lineHeight.value), 1, 2.4);
+      markAnnotationDirty(annotation);
+      autoFitText(annotation);
+      commitHistory();
+      renderInspector();
+      renderCurrentLayer();
+    }
+  });
+
+  const reflowMode = document.querySelector<HTMLSelectElement>("#reflowMode");
+  reflowMode?.addEventListener("change", () => {
+    if (annotation.type === "text") {
+      annotation.reflowMode = reflowMode.value === "replaceOnly" ? "replaceOnly" : "semantic";
+      annotation.reflowable = annotation.reflowMode === "semantic";
+      markAnnotationDirty(annotation);
       commitHistory();
       renderInspector();
       renderCurrentLayer();
@@ -4154,7 +4856,7 @@ function layoutCollisionWarnings(): string[] {
       continue;
     }
     for (const image of sourceImageItemsByPage.get(textRect.pageId) ?? []) {
-      if (isSourceImageAlreadyEdited(image.id)) {
+      if (isSourceImageAlreadyEdited(image.id) || semanticObjectReflowTarget(image.id)) {
         continue;
       }
       const overlap = normalizedOverlapAreaRatio(textRect, image);
@@ -4730,7 +5432,8 @@ function requiresPdfEngineForSafeExport(): boolean {
       }
       return annotation.type === "text" && Boolean(annotation.sourceTextId || annotation.eraseOriginal);
     }) ||
-    pageItems.some((item) => layoutFlowSlicesForPage(item.id).length > 0)
+    pageItems.some((item) => layoutFlowSlicesForPage(item.id).length > 0) ||
+    semanticReflowPlan().movedObjects.length > 0
   );
 }
 
@@ -4762,6 +5465,7 @@ function buildEnginePayload(bytes: Uint8Array): EnginePayload {
     })
     .filter((operation): operation is EngineOperation => Boolean(operation));
   const flowSliceOperations = buildEngineFlowSliceOperations(pageIndexById);
+  const objectFlowOperations = buildEngineObjectFlowOperations(pageIndexById);
   const flowOperations = buildEngineFlowOperations(pageIndexById);
 
   return {
@@ -4771,7 +5475,7 @@ function buildEnginePayload(bytes: Uint8Array): EnginePayload {
       sourceIndex: item.sourceIndex,
       rotation: item.rotation,
     })),
-    operations: [...deleteOperations, ...flowSliceOperations, ...annotationOperations, ...flowOperations],
+    operations: [...deleteOperations, ...flowSliceOperations, ...objectFlowOperations, ...annotationOperations, ...flowOperations],
     sourceTexts: buildEngineSourceTexts(pageIndexById),
     metadata: documentMetadata,
     saveOptions: buildEngineSaveOptions({ saveMode, redactionMode, sanitizeHiddenInfo }),
@@ -4838,6 +5542,96 @@ function buildEngineSourceTexts(pageIndexById: Map<string, number>): EngineSourc
   return sourceTexts;
 }
 
+function buildEngineObjectFlowOperations(pageIndexById: Map<string, number>): EngineOperation[] {
+  const operations: EngineOperation[] = [];
+  for (const target of semanticReflowPlan().movedObjects) {
+    const sourcePageIndex = pageIndexById.get(target.sourcePageId);
+    const targetPageIndex = pageIndexById.get(target.pageId);
+    if (sourcePageIndex === undefined || targetPageIndex === undefined) {
+      continue;
+    }
+    if (target.kind === "image") {
+      const image = sourceImageItemById(target.sourceObjectId);
+      if (!image) {
+        continue;
+      }
+      if (sourcePageIndex !== targetPageIndex) {
+        operations.push({
+          type: "deleteImage",
+          pageIndex: sourcePageIndex,
+          x: image.x,
+          y: image.y,
+          width: image.width,
+          height: image.height,
+          sourceImageId: image.sourceImageId,
+          color: "#ffffff",
+          opacity: 1,
+          strokeWidth: 0,
+        });
+      }
+      operations.push({
+        type: "moveImage",
+        pageIndex: targetPageIndex,
+        sourcePageIndex,
+        sourceImageId: image.sourceImageId,
+        x: target.x,
+        y: target.y,
+        width: target.width,
+        height: target.height,
+        color: "#ffffff",
+        opacity: 1,
+        strokeWidth: 0,
+        eraseOriginal: {
+          x: image.x,
+          y: image.y,
+          width: image.width,
+          height: image.height,
+        },
+      });
+      continue;
+    }
+    const vector = sourceVectorItemById(target.sourceObjectId);
+    if (!vector) {
+      continue;
+    }
+    if (sourcePageIndex !== targetPageIndex) {
+      operations.push({
+        type: "deleteVector",
+        pageIndex: sourcePageIndex,
+        x: vector.x,
+        y: vector.y,
+        width: vector.width,
+        height: vector.height,
+        sourceVectorId: vector.sourceVectorId,
+        color: "#ffffff",
+        opacity: 1,
+        strokeWidth: 0,
+      });
+    }
+    operations.push({
+      type: "moveVector",
+      pageIndex: targetPageIndex,
+      sourcePageIndex,
+      sourceVectorId: vector.sourceVectorId,
+      x: target.x,
+      y: target.y,
+      width: target.width,
+      height: target.height,
+      color: vector.stroke ?? "#176b58",
+      fill: vector.fill,
+      opacity: 1,
+      strokeWidth: vector.strokeWidth ?? 1,
+      eraseOriginal: {
+        x: vector.x,
+        y: vector.y,
+        width: vector.width,
+        height: vector.height,
+      },
+    });
+  }
+  return operations;
+}
+
 function buildEngineFlowOperations(pageIndexById: Map<string, number>): EngineOperation[] {
   const operations: EngineOperation[] = [];
   for (const [pageId, items] of sourceTextItemsByPage.entries()) {
@@ -4885,6 +5679,7 @@ function buildEngineFlowOperations(pageIndexById: Map<string, number>): EngineOp
         opacity: 1,
         strokeWidth: 1,
         lineHeight: 1.25,
+        textAlign: "left",
         eraseOriginal: target.pageId === pageId
           ? {
               x: item.x,
@@ -5009,7 +5804,8 @@ function annotationToEngineOperation(annotation: Annotation, pageIndex: number):
       fontSize: annotation.fontSize,
       fontFamily: annotation.fontFamily,
       fontName: annotation.fontName,
-      lineHeight: 1.25,
+      lineHeight: annotation.lineHeight ?? 1.25,
+      textAlign: annotation.textAlign ?? "left",
       eraseOriginal: annotation.eraseOriginal,
     };
   }
@@ -5375,15 +6171,21 @@ function drawPdfText(
 ): void {
   const font = chooseFontForText(fonts, annotation.text);
   const fontSize = annotation.fontSize;
-  const lineHeight = fontSize * 1.25;
+  const lineHeight = fontSize * (annotation.lineHeight ?? 1.25);
   const lines = wrapTextWithFont(font, annotation.text, fontSize, Math.max(12, box.width - 4));
   for (let index = 0; index < lines.length; index += 1) {
     const lineY = box.y + box.height - 2 - fontSize - index * lineHeight;
     if (lineY < box.y) {
       return;
     }
+    const lineWidth = font.widthOfTextAtSize(lines[index], fontSize);
+    const lineX = annotation.textAlign === "center"
+      ? box.x + Math.max(2, (box.width - lineWidth) / 2)
+      : annotation.textAlign === "right"
+        ? box.x + Math.max(2, box.width - lineWidth - 2)
+        : box.x + 2;
     page.drawText(lines[index], {
-      x: box.x + 2,
+      x: lineX,
       y: lineY,
       size: fontSize,
       font,
@@ -5461,7 +6263,7 @@ function autoFitText(annotation: TextAnnotation): void {
   const boxWidth = Math.max(16, annotation.width * pdfPageWidth - 4);
   context.font = `${annotation.fontSize}px ${annotation.fontFamily ?? defaultEditorFontFamily()}`;
   const lines = wrapText(context, annotation.text || " ", boxWidth);
-  const textHeight = lines.length * annotation.fontSize * 1.25 + 8;
+  const textHeight = lines.length * annotation.fontSize * (annotation.lineHeight ?? 1.25) + 8;
   annotation.height = clamp(textHeight / pdfPageHeight, 0.035, 1 - annotation.y);
 }
 
@@ -5511,6 +6313,7 @@ function clearSelection(): void {
 }
 
 function commitHistory(): void {
+  semanticReflowPlanCache = null;
   undoStack.push(makeSnapshot());
   redoStack = [];
 }

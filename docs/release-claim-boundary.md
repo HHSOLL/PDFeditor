@@ -84,6 +84,12 @@ being confused with a fully verified Acrobat Pro replacement claim.
   PDF soft wraps, lose word order, overlap protected image/caption/table regions,
   or image/vector clicks schedule deletion immediately blocks above-80 external
   scoring regardless of standards or deployment evidence.
+- **Core editing UX hardening:** interactive paragraph grouping, context-aware
+  inspector behavior, and semantic reflow are under active hardening. The 90
+  readiness score is not a substitute for real document editing quality. Further
+  parity score increases remain blocked until text reflow passes real-document
+  UX tests for paragraph structure, protected image/caption/table avoidance,
+  cross-page cascade, and searchable structural export.
 - **Preflight:** the current engine reports local signals and can include
   veraPDF PDF/A/PDF/UA validation output. PDF/X-3 fixup is implemented through
   Ghostscript `pdfwrite` and accepted only after qpdf, PyMuPDF, and local PDF/X

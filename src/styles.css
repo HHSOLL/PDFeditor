@@ -794,6 +794,23 @@ button:disabled {
   gap: 7px;
 }
 
+.inspector-section {
+  display: grid;
+  gap: 10px;
+  border-bottom: 1px solid #edf1f5;
+  padding-bottom: 12px;
+}
+
+.compact-field {
+  gap: 3px;
+}
+
+.compact-field strong,
+.compact-field span {
+  color: #172026;
+  font-size: 13px;
+}
+
 .field label {
   color: #53616e;
   font-size: 12px;

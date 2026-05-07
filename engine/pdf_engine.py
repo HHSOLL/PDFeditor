@@ -701,6 +701,7 @@ def apply_operations(
         operations = validate_operations(payload.get("operations", []), output.page_count)
         save_options = normalize_save_options(payload.get("saveOptions"))
         operations_by_page = group_operations(operations)
+        moved_source_images = collect_all_moved_source_images(output, operations)
         for page_index, page_operations in operations_by_page.items():
             page = output[page_index]
             initial_metrics = PageMetrics(page.rect.width, page.rect.height)
@@ -709,7 +710,6 @@ def apply_operations(
             apply_annotation_delete_phase(page, page_operations, metrics)
             apply_form_field_phase(page, page_operations, metrics)
             flow_slice_images = render_flow_slice_images(page, page_operations, metrics)
-            moved_source_images = collect_moved_source_images(page, page_operations, metrics)
             apply_redaction_phase(page, page_operations, metrics, save_options)
             apply_insert_phase(page, page_operations, metrics, font_path, flow_slice_images, moved_source_images, save_options)
 
@@ -1042,6 +1042,13 @@ def validate_operations(value: Any, page_count: int) -> list[Operation]:
         operation: Operation = dict(raw)  # type: ignore[assignment]
         operation["type"] = op_type
         operation["pageIndex"] = page_index
+        try:
+            source_page_index = int(raw.get("sourcePageIndex", page_index))
+        except (TypeError, ValueError):
+            source_page_index = page_index
+        if source_page_index < 0 or source_page_index >= page_count:
+            source_page_index = page_index
+        operation["sourcePageIndex"] = source_page_index
         operations.append(operation)
     return operations
 
@@ -1465,6 +1472,24 @@ def collect_moved_source_images(
     return images
 
 
+def collect_all_moved_source_images(document: fitz.Document, operations: list[Operation]) -> dict[str, bytes]:
+    images: dict[str, bytes] = {}
+    for operation in operations:
+        if operation["type"] != "moveImage":
+            continue
+        source_page_index = int(operation.get("sourcePageIndex", operation.get("pageIndex", 0)))
+        if source_page_index < 0 or source_page_index >= document.page_count:
+            source_page_index = int(operation.get("pageIndex", 0))
+        if source_page_index < 0 or source_page_index >= document.page_count:
+            continue
+        page = document[source_page_index]
+        metrics = PageMetrics(page.rect.width, page.rect.height)
+        image_bytes = extract_source_image_bytes(page, operation, metrics)
+        if image_bytes:
+            images[moved_source_image_key(operation)] = image_bytes
+    return images
+
+
 def moved_source_image_key(operation: Operation) -> str:
     source_id = str(operation.get("sourceImageId", "")).strip()
     if source_id:
@@ -1550,12 +1575,16 @@ def apply_redaction_phase(
             has_redactions = True
             force_graphics_removal = True
         elif operation["type"] == "moveVector":
+            if int(operation.get("sourcePageIndex", operation.get("pageIndex", 0))) != int(operation.get("pageIndex", 0)):
+                continue
             source = operation.get("eraseOriginal")
             source_rect = to_rect(source, metrics) if isinstance(source, dict) else to_rect(operation, metrics)
             page.add_redact_annot(source_rect, fill=(1, 1, 1))
             has_redactions = True
             force_graphics_removal = True
         elif operation["type"] == "moveImage":
+            if int(operation.get("sourcePageIndex", operation.get("pageIndex", 0))) != int(operation.get("pageIndex", 0)):
+                continue
             source = operation.get("eraseOriginal")
             source_rect = to_rect(source, metrics) if isinstance(source, dict) else to_rect(operation, metrics)
             page.add_redact_annot(source_rect, fill=(1, 1, 1))
@@ -1687,7 +1716,7 @@ def apply_insert_phase(
             if image_bytes:
                 page.insert_image(to_rect(operation, metrics), stream=image_bytes, keep_proportion=True)
         elif op_type == "moveVector":
-            draw_outline_rect(page, operation, metrics)
+            draw_moved_vector(page, operation, metrics)
         elif op_type == "typedSignature":
             signed_operation: Operation = dict(operation)  # type: ignore[assignment]
             signed_operation["text"] = str(operation.get("signerName") or operation.get("text") or "")
@@ -1800,13 +1829,14 @@ def insert_reflow_text(
     if font_name == "pdfeditfont":
         insert_custom_font_htmlbox(page, rect, operation, text, font_size, color, font_path)
         return
+    align = text_alignment(operation)
     remaining = page.insert_textbox(
         rect,
         text,
         fontsize=font_size,
         fontname=font_name,
         color=color,
-        align=fitz.TEXT_ALIGN_LEFT,
+        align=align,
     )
     if isinstance(remaining, (int, float)) and remaining < 0:
         page.insert_text(
@@ -1828,7 +1858,8 @@ def insert_custom_font_htmlbox(
     font_path: Path,
 ) -> None:
     line_height = max(1.0, float(operation.get("lineHeight", 1.18)))
-    html = build_text_html(text, font_size, color, line_height)
+    align = str(operation.get("textAlign", "left"))
+    html = build_text_html(text, font_size, color, line_height, align)
     archive = fitz.Archive(str(font_path), font_path.name)
     css = f"@font-face{{font-family:pdfedit;src:url({font_path.name});}}"
     page.insert_htmlbox(
@@ -1840,7 +1871,7 @@ def insert_custom_font_htmlbox(
     )
 
 
-def build_text_html(text: str, font_size: float, color: tuple[float, float, float], line_height: float) -> str:
+def build_text_html(text: str, font_size: float, color: tuple[float, float, float], line_height: float, align: str = "left") -> str:
     red = int(color[0] * 255)
     green = int(color[1] * 255)
     blue = int(color[2] * 255)
@@ -1850,10 +1881,20 @@ def build_text_html(text: str, font_size: float, color: tuple[float, float, floa
         .replace(">", "&gt;")
         .replace("\n", "<br>")
     )
+    text_align = "right" if align == "right" else "center" if align == "center" else "left"
     return (
         f"<div style=\"font-family:pdfedit, sans-serif; font-size:{font_size}pt; "
-        f"line-height:{line_height}; color:rgb({red},{green},{blue});\">{escaped}</div>"
+        f"line-height:{line_height}; text-align:{text_align}; color:rgb({red},{green},{blue});\">{escaped}</div>"
     )
+
+
+def text_alignment(operation: Operation) -> int:
+    align = str(operation.get("textAlign", "left"))
+    if align == "center":
+        return fitz.TEXT_ALIGN_CENTER
+    if align == "right":
+        return fitz.TEXT_ALIGN_RIGHT
+    return fitz.TEXT_ALIGN_LEFT
 
 
 def choose_engine_font(operation: Operation, text: str, font_path: Path) -> str:
@@ -1877,6 +1918,20 @@ def draw_outline_rect(page: fitz.Page, operation: Operation, metrics: PageMetric
     rect = to_rect(operation, metrics)
     color = hex_to_rgb(str(operation.get("color", "#176b58")))
     page.draw_rect(rect, color=color, width=float(operation.get("strokeWidth", 2)))
+
+
+def draw_moved_vector(page: fitz.Page, operation: Operation, metrics: PageMetrics) -> None:
+    rect = to_rect(operation, metrics)
+    color = hex_to_rgb(str(operation.get("color", "#176b58")))
+    fill_value = str(operation.get("fill", "") or "")
+    fill = hex_to_rgb(fill_value) if fill_value.startswith("#") else None
+    page.draw_rect(
+        rect,
+        color=color,
+        fill=fill,
+        width=max(0.5, float(operation.get("strokeWidth", 1))),
+        fill_opacity=float(operation.get("opacity", 1)) if fill else 1,
+    )
 
 
 def draw_pen(page: fitz.Page, operation: Operation, metrics: PageMetrics) -> None:

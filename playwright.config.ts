@@ -6,6 +6,7 @@ const reuseServers = process.env.PLAYWRIGHT_REUSE_SERVER === "1" && !isCi;
 export default defineConfig({
   testDir: "./tests",
   timeout: 60_000,
+  workers: Number(process.env.PLAYWRIGHT_WORKERS ?? "1"),
   expect: {
     timeout: 10_000,
   },
